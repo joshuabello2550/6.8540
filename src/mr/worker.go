@@ -39,28 +39,39 @@ var NO_TASK_NUMBER = -1
 
 // main/mrworker.go calls this function.
 func Worker(sockname string, mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
-
+	log.Println("Starting a worker")
 	coordSockName = sockname
 	// Your worker implementation here.
 
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
-	for {
-		// TODO: add a request to check if the coordinator is finished
+	for CallIsCoordinatorStillAlive() {
 		areMapTasksDone := CallAreAllMapTasksDone()
 		log.Println("areMapTasksDone: ", areMapTasksDone)
-		if areMapTasksDone {
+		if !areMapTasksDone {
 			CallRequestMapTask(mapf)
 		} else {
 			CallRequestReduceTask(reducef)
 		}
-		time.Sleep(10 * time.Second)
+		time.Sleep(5 * time.Second)
+	}
+}
 
+func CallIsCoordinatorStillAlive() bool {
+	args := EmptyArgsOrReply{}
+	reply := EmptyArgsOrReply{}
+	ok := call("Coordinator.GetIsCoordinatorStillAlive", &args, &reply)
+	if ok {
+		fmt.Println("Coordinator is alive")
+		return true
+	} else {
+		fmt.Println("Coordinator NOT alive")
+		return false
 	}
 }
 
 func CallAreAllMapTasksDone() bool {
-	args := struct{}{}
+	args := EmptyArgsOrReply{}
 	reply := AreMapTasksDoneReply{}
 	ok := call("Coordinator.GetAreAllMapTasksDone", &args, &reply)
 	if ok {
@@ -69,15 +80,15 @@ func CallAreAllMapTasksDone() bool {
 		fmt.Println("CallAreAllMapTasksDone failed!")
 		return false
 	}
-
 }
 
 func CallRequestMapTask(mapf func(string, string) []KeyValue) {
-	args := struct{}{}
-	reply := MapTaskReply{TaskNumber: NO_TASK_NUMBER}
+	log.Println("CallRequestMapTask")
+	args := EmptyArgsOrReply{}
+	reply := MapTaskReply{}
 	ok := call("Coordinator.GetMapTask", &args, &reply)
 	if ok {
-		if reply.TaskNumber == NO_TASK_NUMBER {
+		if reply.TaskNumber != NO_TASK_NUMBER {
 			handleMapTask(reply, mapf)
 		}
 	} else {
@@ -86,11 +97,12 @@ func CallRequestMapTask(mapf func(string, string) []KeyValue) {
 }
 
 func CallRequestReduceTask(reducef func(string, []string) string) {
-	args := struct{}{}
-	reply := ReduceTaskReply{TaskNumber: NO_TASK_NUMBER}
+	log.Println("CallRequestReduceTask")
+	args := EmptyArgsOrReply{}
+	reply := ReduceTaskReply{}
 	ok := call("Coordinator.GetReduceTask", &args, &reply)
 	if ok {
-		if reply.TaskNumber == NO_TASK_NUMBER {
+		if reply.TaskNumber != NO_TASK_NUMBER {
 			handleReduceTask(reply, reducef)
 		}
 	} else {
@@ -99,8 +111,9 @@ func CallRequestReduceTask(reducef func(string, []string) string) {
 }
 
 func CallDoneMapTask(mapTaskNumber int) {
+	fmt.Println("CallDoneMapTask: ", mapTaskNumber)
 	args := DoneMapTaskArgs{TaskNumber: mapTaskNumber}
-	reply := struct{}{}
+	reply := EmptyArgsOrReply{}
 	ok := call("Coordinator.PutDoneMapTask", &args, &reply)
 	if !ok {
 		fmt.Println("CallDoneMapTask failed!")
@@ -108,8 +121,9 @@ func CallDoneMapTask(mapTaskNumber int) {
 }
 
 func CallDoneReduceTask(reduceTaskNumber int) {
+	fmt.Println("CallDoneReduceTask: ", reduceTaskNumber)
 	args := DoneReduceTaskArgs{TaskNumber: reduceTaskNumber}
-	reply := struct{}{}
+	reply := EmptyArgsOrReply{}
 	ok := call("Coordinator.PutDoneReduceTask", &args, &reply)
 	if !ok {
 		fmt.Println("CallDoneReduceTask failed!")
@@ -117,6 +131,7 @@ func CallDoneReduceTask(reduceTaskNumber int) {
 }
 
 func handleMapTask(mapTask MapTaskReply, mapf func(string, string) []KeyValue) {
+	fmt.Println("handleMapTask: ", mapTask)
 	// Run the map function on the given file
 	filename := mapTask.FileName
 	file, err := os.Open(filename)
@@ -168,6 +183,7 @@ func handleMapTask(mapTask MapTaskReply, mapf func(string, string) []KeyValue) {
 }
 
 func handleReduceTask(reduceTask ReduceTaskReply, reducef func(string, []string) string) {
+	fmt.Println("handleReduceTask: ", reduceTask)
 	reduceTaskNumber := reduceTask.TaskNumber
 	NMap := reduceTask.NMap
 	intermediate := []KeyValue{}

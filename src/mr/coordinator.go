@@ -8,6 +8,7 @@ import (
 	"net/rpc"
 	"os"
 	"sync"
+	"time"
 )
 
 type Coordinator struct {
@@ -31,79 +32,104 @@ type ReduceTask struct {
 
 // Your code here -- RPC handlers for the worker to call.
 
-func (c *Coordinator) GetAreAllMapTasksDone(args *struct{}, reply *AreMapTasksDoneReply) error {
+func (c *Coordinator) GetIsCoordinatorStillAlive(args *EmptyArgsOrReply, reply *EmptyArgsOrReply) error {
+	return nil
+}
+
+func (c *Coordinator) GetAreAllMapTasksDone(args *EmptyArgsOrReply, reply *AreMapTasksDoneReply) error {
 	reply.AreMapTasksDone = c.areAllMapTasksDone()
 	return nil
 }
 
 func (c *Coordinator) areAllMapTasksDone() bool {
-	for _, task := range c.mapTasks {
+	for i, task := range c.mapTasks {
 		task.mu.Lock()
-		if task.isFinished == false {
+		finished := task.isFinished
+		task.mu.Unlock()
+		if !finished {
+			fmt.Println("Map task is not finished: ", i)
 			return false
 		}
-		task.mu.Unlock()
 	}
 	return true
 }
 
 func (c *Coordinator) areAllReduceTasksDone() bool {
-	for _, task := range c.reduceTasks {
+	for i, task := range c.reduceTasks {
 		task.mu.Lock()
-		if task.isFinished == false {
+		finished := task.isFinished
+		task.mu.Unlock()
+		if !finished {
+			fmt.Println("Reduce task is not finished: ", i)
 			return false
 		}
-		task.mu.Unlock()
 	}
 	return true
 }
 
-func (c *Coordinator) GetMapTask(args *struct{}, reply *MapTaskReply) error {
+func (c *Coordinator) waitAndResetMapTask(taskNumber int) {
+	time.Sleep(10 * time.Second)
+	c.mapTasks[taskNumber].mu.Lock()
+	if !c.mapTasks[taskNumber].isFinished {
+		c.mapTasks[taskNumber].isStarted = false
+	}
+	c.mapTasks[taskNumber].mu.Unlock()
+}
+
+func (c *Coordinator) GetMapTask(args *EmptyArgsOrReply, reply *MapTaskReply) error {
 	for i, task := range c.mapTasks {
 		task.mu.Lock()
-		if task.isStarted == false {
+		if !task.isStarted {
 			reply.FileName = task.filename
 			reply.NReduce = len(c.reduceTasks)
 			reply.TaskNumber = i
 			task.isStarted = true
+			task.mu.Unlock()
+			go c.waitAndResetMapTask(reply.TaskNumber)
 			return nil
 		}
 		task.mu.Unlock()
 	}
+	reply.TaskNumber = NO_TASK_NUMBER
+
 	return nil
 }
 
-func (c *Coordinator) GetReduceTask(args *struct{}, reply *ReduceTaskReply) error {
+func (c *Coordinator) GetReduceTask(args *EmptyArgsOrReply, reply *ReduceTaskReply) error {
 	for i, task := range c.reduceTasks {
 		task.mu.Lock()
-		if task.isStarted == false {
+		if !task.isStarted {
 			reply.NMap = len(c.mapTasks)
 			reply.TaskNumber = i
 			task.isStarted = true
+			task.mu.Unlock()
 			return nil
 		}
 		task.mu.Unlock()
 	}
+	reply.TaskNumber = NO_TASK_NUMBER
 	return nil
 }
 
-func (c *Coordinator) PutDoneMapTask(args *DoneMapTaskArgs, reply *struct{}) error {
+func (c *Coordinator) PutDoneMapTask(args *DoneMapTaskArgs, reply *EmptyArgsOrReply) error {
 	taskNumber := args.TaskNumber
 	task := c.mapTasks[taskNumber]
 
 	task.mu.Lock()
 	defer task.mu.Unlock()
 	task.isFinished = true
+	fmt.Printf("PutDoneMapTask %+v\n", task)
 	return nil
 }
 
-func (c *Coordinator) PutDoneReduceTask(args *DoneReduceTaskArgs, reply *struct{}) error {
+func (c *Coordinator) PutDoneReduceTask(args *DoneReduceTaskArgs, reply *EmptyArgsOrReply) error {
 	taskNumber := args.TaskNumber
 	task := c.reduceTasks[taskNumber]
 
 	task.mu.Lock()
 	defer task.mu.Unlock()
 	task.isFinished = true
+	fmt.Printf("PutDoneReduceTask %+v\n", task)
 	return nil
 }
 

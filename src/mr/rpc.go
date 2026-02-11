@@ -20,6 +20,10 @@ type ExampleReply struct {
 }
 
 // Add your RPC definitions here.
+
+type EmptyArgsOrReply struct {
+}
+
 type AreMapTasksDoneReply struct {
 	AreMapTasksDone bool
 }
