@@ -1,7 +1,6 @@
 package mr
 
 import (
-	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -42,12 +41,12 @@ func (c *Coordinator) GetAreAllMapTasksDone(args *EmptyArgsOrReply, reply *AreMa
 }
 
 func (c *Coordinator) areAllMapTasksDone() bool {
-	for i, task := range c.mapTasks {
+	for _, task := range c.mapTasks {
 		task.mu.Lock()
 		finished := task.isFinished
 		task.mu.Unlock()
 		if !finished {
-			fmt.Println("Map task is not finished: ", i)
+			// fmt.Println("Map task is not finished: ", i)
 			return false
 		}
 	}
@@ -55,12 +54,12 @@ func (c *Coordinator) areAllMapTasksDone() bool {
 }
 
 func (c *Coordinator) areAllReduceTasksDone() bool {
-	for i, task := range c.reduceTasks {
+	for _, task := range c.reduceTasks {
 		task.mu.Lock()
 		finished := task.isFinished
 		task.mu.Unlock()
 		if !finished {
-			fmt.Println("Reduce task is not finished: ", i)
+			// fmt.Println("Reduce task is not finished: ", i)
 			return false
 		}
 	}
@@ -69,11 +68,22 @@ func (c *Coordinator) areAllReduceTasksDone() bool {
 
 func (c *Coordinator) waitAndResetMapTask(taskNumber int) {
 	time.Sleep(10 * time.Second)
-	c.mapTasks[taskNumber].mu.Lock()
-	if !c.mapTasks[taskNumber].isFinished {
-		c.mapTasks[taskNumber].isStarted = false
+	task := c.mapTasks[taskNumber]
+	task.mu.Lock()
+	if !task.isFinished {
+		task.isStarted = false
 	}
-	c.mapTasks[taskNumber].mu.Unlock()
+	task.mu.Unlock()
+}
+
+func (c *Coordinator) waitAndResetReduceTask(taskNumber int) {
+	time.Sleep(10 * time.Second)
+	task := c.reduceTasks[taskNumber]
+	task.mu.Lock()
+	if !task.isFinished {
+		task.isStarted = false
+	}
+	task.mu.Unlock()
 }
 
 func (c *Coordinator) GetMapTask(args *EmptyArgsOrReply, reply *MapTaskReply) error {
@@ -91,7 +101,6 @@ func (c *Coordinator) GetMapTask(args *EmptyArgsOrReply, reply *MapTaskReply) er
 		task.mu.Unlock()
 	}
 	reply.TaskNumber = NO_TASK_NUMBER
-
 	return nil
 }
 
@@ -103,6 +112,7 @@ func (c *Coordinator) GetReduceTask(args *EmptyArgsOrReply, reply *ReduceTaskRep
 			reply.TaskNumber = i
 			task.isStarted = true
 			task.mu.Unlock()
+			go c.waitAndResetReduceTask(reply.TaskNumber)
 			return nil
 		}
 		task.mu.Unlock()
@@ -118,7 +128,7 @@ func (c *Coordinator) PutDoneMapTask(args *DoneMapTaskArgs, reply *EmptyArgsOrRe
 	task.mu.Lock()
 	defer task.mu.Unlock()
 	task.isFinished = true
-	fmt.Printf("PutDoneMapTask %+v\n", task)
+	// fmt.Printf("PutDoneMapTask %+v\n", task)
 	return nil
 }
 
@@ -129,7 +139,7 @@ func (c *Coordinator) PutDoneReduceTask(args *DoneReduceTaskArgs, reply *EmptyAr
 	task.mu.Lock()
 	defer task.mu.Unlock()
 	task.isFinished = true
-	fmt.Printf("PutDoneReduceTask %+v\n", task)
+	// fmt.Printf("PutDoneReduceTask %+v\n", task)
 	return nil
 }
 
@@ -162,23 +172,23 @@ func (c *Coordinator) Done() bool {
 
 	// Determine if all the map and reduce tasks are done
 	if c.areAllMapTasksDone() && c.areAllReduceTasksDone() {
-		c.cleanUpIntermediateFiles()
+		// c.cleanUpIntermediateFiles()
 		ret = true
 	}
 
 	return ret
 }
 
-func (c *Coordinator) cleanUpIntermediateFiles() {
-	for mapTaskNumber := range c.mapTasks {
-		for reduceTaskNumber := range c.reduceTasks {
-			fileName := fmt.Sprintf("mr-%d-%d", mapTaskNumber, reduceTaskNumber)
-			if err := os.Remove(fileName); err != nil {
-				log.Println("Could not remove the file: ", fileName)
-			}
-		}
-	}
-}
+// func (c *Coordinator) cleanUpIntermediateFiles() {
+// 	for mapTaskNumber := range c.mapTasks {
+// 		for reduceTaskNumber := range c.reduceTasks {
+// 			fileName := fmt.Sprintf("mr-%d-%d", mapTaskNumber, reduceTaskNumber)
+// 			if err := os.Remove(fileName); err != nil {
+// 				log.Println("Could not remove the file: ", fileName)
+// 			}
+// 		}
+// 	}
+// }
 
 // create a Coordinator.
 // main/mrcoordinator.go calls this function.
@@ -195,12 +205,12 @@ func MakeCoordinator(sockname string, files []string, nReduce int) *Coordinator 
 	}
 
 	// Your code here.
-	fmt.Println("nReduce: ", nReduce)
-	fmt.Println("sockname: ", sockname)
-	for i, x := range files {
-		fmt.Printf("file %d:%s\n", i, x)
-	}
-	fmt.Println("-----------------------------------------")
+	// fmt.Println("nReduce: ", nReduce)
+	// fmt.Println("sockname: ", sockname)
+	// for i, x := range files {
+	// 	fmt.Printf("file %d:%s\n", i, x)
+	// }
+	// fmt.Println("-----------------------------------------")
 
 	c.server(sockname)
 	return &c

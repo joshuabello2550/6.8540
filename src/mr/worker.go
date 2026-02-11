@@ -39,7 +39,7 @@ var NO_TASK_NUMBER = -1
 
 // main/mrworker.go calls this function.
 func Worker(sockname string, mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
-	log.Println("Starting a worker")
+	// log.Println("Starting a worker")
 	coordSockName = sockname
 	// Your worker implementation here.
 
@@ -47,7 +47,7 @@ func Worker(sockname string, mapf func(string, string) []KeyValue, reducef func(
 	// CallExample()
 	for CallIsCoordinatorStillAlive() {
 		areMapTasksDone := CallAreAllMapTasksDone()
-		log.Println("areMapTasksDone: ", areMapTasksDone)
+		// log.Println("areMapTasksDone: ", areMapTasksDone)
 		if !areMapTasksDone {
 			CallRequestMapTask(mapf)
 		} else {
@@ -62,10 +62,10 @@ func CallIsCoordinatorStillAlive() bool {
 	reply := EmptyArgsOrReply{}
 	ok := call("Coordinator.GetIsCoordinatorStillAlive", &args, &reply)
 	if ok {
-		fmt.Println("Coordinator is alive")
+		// fmt.Println("Coordinator is alive")
 		return true
 	} else {
-		fmt.Println("Coordinator NOT alive")
+		// fmt.Println("Coordinator NOT alive")
 		return false
 	}
 }
@@ -83,7 +83,7 @@ func CallAreAllMapTasksDone() bool {
 }
 
 func CallRequestMapTask(mapf func(string, string) []KeyValue) {
-	log.Println("CallRequestMapTask")
+	// log.Println("CallRequestMapTask")
 	args := EmptyArgsOrReply{}
 	reply := MapTaskReply{}
 	ok := call("Coordinator.GetMapTask", &args, &reply)
@@ -97,7 +97,7 @@ func CallRequestMapTask(mapf func(string, string) []KeyValue) {
 }
 
 func CallRequestReduceTask(reducef func(string, []string) string) {
-	log.Println("CallRequestReduceTask")
+	// log.Println("CallRequestReduceTask")
 	args := EmptyArgsOrReply{}
 	reply := ReduceTaskReply{}
 	ok := call("Coordinator.GetReduceTask", &args, &reply)
@@ -111,7 +111,7 @@ func CallRequestReduceTask(reducef func(string, []string) string) {
 }
 
 func CallDoneMapTask(mapTaskNumber int) {
-	fmt.Println("CallDoneMapTask: ", mapTaskNumber)
+	// fmt.Println("CallDoneMapTask: ", mapTaskNumber)
 	args := DoneMapTaskArgs{TaskNumber: mapTaskNumber}
 	reply := EmptyArgsOrReply{}
 	ok := call("Coordinator.PutDoneMapTask", &args, &reply)
@@ -121,7 +121,7 @@ func CallDoneMapTask(mapTaskNumber int) {
 }
 
 func CallDoneReduceTask(reduceTaskNumber int) {
-	fmt.Println("CallDoneReduceTask: ", reduceTaskNumber)
+	// fmt.Println("CallDoneReduceTask: ", reduceTaskNumber)
 	args := DoneReduceTaskArgs{TaskNumber: reduceTaskNumber}
 	reply := EmptyArgsOrReply{}
 	ok := call("Coordinator.PutDoneReduceTask", &args, &reply)
@@ -131,7 +131,7 @@ func CallDoneReduceTask(reduceTaskNumber int) {
 }
 
 func handleMapTask(mapTask MapTaskReply, mapf func(string, string) []KeyValue) {
-	fmt.Println("handleMapTask: ", mapTask)
+	// fmt.Println("handleMapTask: ", mapTask)
 	// Run the map function on the given file
 	filename := mapTask.FileName
 	file, err := os.Open(filename)
@@ -172,6 +172,9 @@ func handleMapTask(mapTask MapTaskReply, mapf func(string, string) []KeyValue) {
 
 	// Atomically rename the files
 	for reduceNum, tempFile := range tempFilesMap {
+		if err = tempFile.Close(); err != nil {
+			log.Print("Could not close file: ", tempFile.Name(), err)
+		}
 		finalFinalName := fmt.Sprintf("mr-%d-%d", mapTaskNumber, reduceNum)
 		if err = os.Rename(tempFile.Name(), finalFinalName); err != nil {
 			log.Print("Could not atomically rename the file: ", tempFile.Name(), err)
@@ -183,7 +186,7 @@ func handleMapTask(mapTask MapTaskReply, mapf func(string, string) []KeyValue) {
 }
 
 func handleReduceTask(reduceTask ReduceTaskReply, reducef func(string, []string) string) {
-	fmt.Println("handleReduceTask: ", reduceTask)
+	// fmt.Println("handleReduceTask: ", reduceTask)
 	reduceTaskNumber := reduceTask.TaskNumber
 	NMap := reduceTask.NMap
 	intermediate := []KeyValue{}
@@ -209,7 +212,7 @@ func handleReduceTask(reduceTask ReduceTaskReply, reducef func(string, []string)
 	sort.Sort(ByKey(intermediate))
 
 	oname := fmt.Sprintf("mr-out-%d", reduceTaskNumber)
-	ofile, err := os.Create(oname)
+	ofile, err := os.CreateTemp(".", oname)
 	if err != nil {
 		log.Print("Could not create output for the reduce task: ", oname, err)
 	}
@@ -234,6 +237,10 @@ func handleReduceTask(reduceTask ReduceTaskReply, reducef func(string, []string)
 
 	if err = ofile.Close(); err != nil {
 		log.Print("Could not close file: ", oname, err)
+	}
+
+	if err = os.Rename(ofile.Name(), oname); err != nil {
+		log.Print("Could not atomically rename the file: ", ofile.Name(), err)
 	}
 
 	CallDoneReduceTask(reduceTaskNumber)
