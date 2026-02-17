@@ -6,7 +6,7 @@ import (
 
 	"6.5840/kvsrv1/rpc"
 	"6.5840/labrpc"
-	"6.5840/tester1"
+	tester "6.5840/tester1"
 )
 
 const Debug = false
@@ -18,15 +18,20 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-
 type KVServer struct {
-	mu sync.Mutex
-
+	mu      sync.Mutex
+	records map[string]*Record
 	// Your definitions here.
 }
 
+type Record struct {
+	value   string
+	version rpc.Tversion
+	mu      sync.Mutex
+}
+
 func MakeKVServer() *KVServer {
-	kv := &KVServer{}
+	kv := &KVServer{records: make(map[string]*Record)}
 	// Your code here.
 	return kv
 }
@@ -35,6 +40,18 @@ func MakeKVServer() *KVServer {
 // exists. Otherwise, Get returns ErrNoKey.
 func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
 	// Your code here.
+	key := args.Key
+	record, ok := kv.records[key]
+	if ok {
+		record.mu.Lock()
+		defer record.mu.Unlock()
+
+		reply.Err = rpc.OK
+		reply.Value = record.value
+		reply.Version = record.version
+	} else {
+		reply.Err = rpc.ErrNoKey
+	}
 }
 
 // Update the value for a key if args.Version matches the version of
@@ -43,9 +60,33 @@ func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
 // args.Version is 0, and returns ErrNoKey otherwise.
 func (kv *KVServer) Put(args *rpc.PutArgs, reply *rpc.PutReply) {
 	// Your code here.
+	key, value, version := args.Key, args.Value, args.Version
+	record, ok := kv.records[key]
+	// key in record
+	if ok {
+		record.mu.Lock()
+		defer record.mu.Unlock()
+
+		// version don't match
+		if record.version != version {
+			reply.Err = rpc.ErrVersion
+		} else {
+			kv.records[key].value = value
+			kv.records[key].version += 1
+			reply.Err = rpc.OK
+		}
+	} else {
+		// add record if first entry
+		if version == 0 {
+			newRecord := Record{value: value, version: version + 1}
+			kv.records[key] = &newRecord
+			reply.Err = rpc.OK
+		} else {
+			reply.Err = rpc.ErrNoKey
+		}
+
+	}
 }
-
-
 
 // You can ignore all arguments; they are for replicated KVservers
 func StartKVServer(tc *tester.TesterClnt, ends []*labrpc.ClientEnd, gid tester.Tgid, srv int, persister *tester.Persister) []any {
