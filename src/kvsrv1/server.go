@@ -70,18 +70,19 @@ func (kv *KVServer) Put(args *rpc.PutArgs, reply *rpc.PutReply) {
 		if record.version != version {
 			reply.Err = rpc.ErrVersion
 		} else {
+			reply.Err = rpc.OK
 			kv.records[key].value = value
 			kv.records[key].version += 1
-			reply.Err = rpc.OK
 		}
 	} else {
 		// add record if first entry
-		if version == 0 {
+		if version != 0 {
+			reply.Err = rpc.ErrNoKey
+		} else {
+
+			reply.Err = rpc.OK
 			newRecord := Record{value: value, version: version + 1}
 			kv.records[key] = &newRecord
-			reply.Err = rpc.OK
-		} else {
-			reply.Err = rpc.ErrNoKey
 		}
 
 	}
