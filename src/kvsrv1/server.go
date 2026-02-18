@@ -19,15 +19,14 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 }
 
 type KVServer struct {
-	mu      sync.Mutex
-	records map[string]*Record
+	mu sync.Mutex
 	// Your definitions here.
+	records map[string]*Record
 }
 
 type Record struct {
 	value   string
 	version rpc.Tversion
-	mu      sync.Mutex
 }
 
 func MakeKVServer() *KVServer {
@@ -40,12 +39,12 @@ func MakeKVServer() *KVServer {
 // exists. Otherwise, Get returns ErrNoKey.
 func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
 	// Your code here.
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
 	key := args.Key
 	record, ok := kv.records[key]
 	if ok {
-		record.mu.Lock()
-		defer record.mu.Unlock()
-
 		reply.Err = rpc.OK
 		reply.Value = record.value
 		reply.Version = record.version
@@ -60,13 +59,13 @@ func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
 // args.Version is 0, and returns ErrNoKey otherwise.
 func (kv *KVServer) Put(args *rpc.PutArgs, reply *rpc.PutReply) {
 	// Your code here.
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
 	key, value, version := args.Key, args.Value, args.Version
 	record, ok := kv.records[key]
 	// key in record
 	if ok {
-		record.mu.Lock()
-		defer record.mu.Unlock()
-
 		// version don't match
 		if record.version != version {
 			reply.Err = rpc.ErrVersion
