@@ -1,7 +1,7 @@
 package kvsrv
 
 import (
-	"log"
+	"time"
 
 	"6.5840/kvsrv1/rpc"
 	kvtest "6.5840/kvtest1"
@@ -9,8 +9,9 @@ import (
 )
 
 type Clerk struct {
-	clnt   *tester.Clnt
-	server string
+	clnt    *tester.Clnt
+	server  string
+	isfirst bool
 }
 
 func MakeClerk(clnt *tester.Clnt, server string) kvtest.IKVClerk {
@@ -40,9 +41,8 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 			if reply.Err == rpc.ErrNoKey || reply.Err == rpc.OK {
 				return reply.Value, reply.Version, reply.Err
 			}
-		} else {
-			log.Println("Error calling clerk get")
 		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -66,12 +66,19 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 func (ck *Clerk) Put(key, value string, version rpc.Tversion) rpc.Err {
 	// You will have to modify this function.
 	args := rpc.PutArgs{Key: key, Value: value, Version: version}
-	reply := rpc.PutReply{}
-	ok := ck.clnt.Call(ck.server, "KVServer.Put", &args, &reply)
-	if ok {
-		return reply.Err
-	} else {
-		log.Println("Error calling clerk put")
-		return "Error calling clerk put"
+	for {
+		reply := rpc.PutReply{}
+		ok := ck.clnt.Call(ck.server, "KVServer.Put", &args, &reply)
+		if ok {
+			if reply.Err == rpc.ErrVersion && !ck.isfirst {
+				ck.isfirst = true
+				return rpc.ErrMaybe
+			} else {
+				ck.isfirst = true
+				return reply.Err
+			}
+		}
+		ck.isfirst = false
+		time.Sleep(100 * time.Millisecond)
 	}
 }
