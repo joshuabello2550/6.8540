@@ -21,3 +21,28 @@ type ExampleReply struct {
 
 // Add your RPC definitions here.
 
+type EmptyArgsOrReply struct {
+}
+
+type AreMapTasksDoneReply struct {
+	AreMapTasksDone bool
+}
+
+type MapTaskReply struct {
+	FileName   string
+	TaskNumber int
+	NReduce    int
+}
+
+type ReduceTaskReply struct {
+	TaskNumber int
+	NMap       int
+}
+
+type DoneMapTaskArgs struct {
+	TaskNumber int
+}
+
+type DoneReduceTaskArgs struct {
+	TaskNumber int
+}
