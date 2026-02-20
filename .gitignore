@@ -1,3 +1,5 @@
 pkg/
 *-handin.tar.gz
+
+.DS_Store
 mr-*
