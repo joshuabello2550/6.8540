@@ -1,7 +1,10 @@
 package lock
 
 import (
-	"6.5840/kvtest1"
+	"time"
+
+	"6.5840/kvsrv1/rpc"
+	kvtest "6.5840/kvtest1"
 )
 
 type Lock struct {
@@ -11,7 +14,11 @@ type Lock struct {
 	// MakeLock().
 	ck kvtest.IKVClerk
 	// You may add code here
+	lockName string
+	ckUUID   string
 }
+
+const NoClient = "NONE"
 
 // The tester calls MakeLock() and passes in a k/v clerk; your code can
 // perform a Put or Get by calling lk.ck.Put() or lk.ck.Get().
@@ -20,15 +27,53 @@ type Lock struct {
 // lockname argument; locks with different names should be
 // independent.
 func MakeLock(ck kvtest.IKVClerk, lockname string) *Lock {
-	lk := &Lock{ck: ck}
-	// You may add code here
+	ckUUID := kvtest.RandValue(8)
+	lk := &Lock{ck: ck, ckUUID: ckUUID, lockName: lockname}
+
+	// add the lock to the server if it doesn't exist
+	_, _, err := lk.ck.Get(lockname)
+	if err == rpc.ErrNoKey {
+		lk.ck.Put(lockname, NoClient, rpc.Tversion(0))
+	}
 	return lk
 }
 
 func (lk *Lock) Acquire() {
-	// Your code here
+	for {
+		value, version, _ := lk.ck.Get(lk.lockName)
+		if value == NoClient {
+			err := lk.ck.Put(lk.lockName, lk.ckUUID, version)
+			if err == rpc.OK {
+				break
+			}
+			if err == rpc.ErrMaybe {
+				new_value, new_version, _ := lk.ck.Get(lk.lockName)
+				if new_value == lk.ckUUID && new_version == version+1 {
+					break
+				}
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func (lk *Lock) Release() {
-	// Your code here
+	value, version, _ := lk.ck.Get(lk.lockName)
+	if value != lk.ckUUID {
+		panic("value is not equal to the lk.ckUUID")
+	}
+	for {
+		err := lk.ck.Put(lk.lockName, NoClient, version)
+		if err == rpc.OK {
+			break
+		}
+		if err == rpc.ErrMaybe {
+			new_value, new_version, _ := lk.ck.Get(lk.lockName)
+			if new_value == NoClient || new_version > version+1 {
+				break
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
 }
