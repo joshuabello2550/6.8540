@@ -1,6 +1,8 @@
 package lock
 
 import (
+	"time"
+
 	"6.5840/kvsrv1/rpc"
 	kvtest "6.5840/kvtest1"
 )
@@ -44,13 +46,34 @@ func (lk *Lock) Acquire() {
 			if err == rpc.OK {
 				break
 			}
+			if err == rpc.ErrMaybe {
+				new_value, new_version, _ := lk.ck.Get(lk.lockName)
+				if new_value == lk.ckUUID && new_version == version+1 {
+					break
+				}
+			}
 		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
 func (lk *Lock) Release() {
 	value, version, _ := lk.ck.Get(lk.lockName)
-	if value == lk.ckUUID {
-		lk.ck.Put(lk.lockName, NoClient, version)
+	if value != lk.ckUUID {
+		panic("value is not equal to the lk.ckUUID")
 	}
+	for {
+		err := lk.ck.Put(lk.lockName, NoClient, version)
+		if err == rpc.OK {
+			break
+		}
+		if err == rpc.ErrMaybe {
+			new_value, new_version, _ := lk.ck.Get(lk.lockName)
+			if new_value == NoClient || new_version > version+1 {
+				break
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
 }
