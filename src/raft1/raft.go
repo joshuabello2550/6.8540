@@ -9,6 +9,7 @@ package raft
 
 import (
 	//	"bytes"
+	"log/slog"
 	"math/rand"
 	"sync"
 	"time"
@@ -19,7 +20,21 @@ import (
 	tester "6.5840/tester1"
 )
 
-type logEntries struct{}
+type LogEntries struct {
+	Term    int
+	command string
+}
+
+type ServerState int
+
+// Declare the possible values for ServerState using iota
+const (
+	Leader    ServerState = iota // 0
+	Follower                     // 1
+	Candidate                    // 2
+)
+
+var nullVotedFor = -1
 
 // A Go object implementing a single Raft peer.
 type Raft struct {
@@ -33,13 +48,18 @@ type Raft struct {
 	// state a Raft server must maintain.
 	currentTerm int
 	votedFor    int
-	log         []logEntries
+	log         []LogEntries
 
 	commitIndex int
 	lastApplied int
 
 	nextIndex  []int
 	matchIndex []int
+
+	// User defined state
+	status                  ServerState
+	isReceivedAppendEntries bool
+	numVotesReceived        int
 }
 
 // return currentTerm and whether this server
@@ -47,9 +67,15 @@ type Raft struct {
 func (rf *Raft) GetState() (int, bool) {
 
 	var term int
-	var isleader bool
+	var isLeader bool
 	// Your code here (3A).
-	return term, isleader
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	term = rf.currentTerm
+	isLeader = rf.status == Leader
+	slog.Info("GetState: ", "Server", rf.me, "Term", rf.currentTerm, "Status", rf.status)
+	return term, isLeader
 }
 
 // save Raft's persistent state to stable storage,
@@ -111,7 +137,8 @@ type AppendEntriesArgs struct {
 	LeaderId     int
 	PrevLogIndex int
 	PrevLogTerm  int
-	Entries      []logEntries
+	Entries      []LogEntries
+	LeaderCommit int
 }
 
 type AppendEntriesReply struct {
@@ -120,7 +147,34 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
+	slog.Debug("Function AppendEntries", "Server", rf.me, "Term", rf.currentTerm)
+
+	isSuccess := false
+	if args.Term > rf.currentTerm {
+		// convert to a Follower
+		slog.Debug("becoming a follower", "Server", rf.me, "Term", rf.currentTerm)
+		rf.votedFor = nullVotedFor
+		rf.status = Follower
+		rf.currentTerm = args.Term
+	} else {
+		if args.Term < rf.currentTerm {
+			isSuccess = false
+		} else {
+			isSuccess = true
+		}
+
+		// heartbeat
+		if len(args.Entries) == 0 {
+			slog.Debug("received heartbeat", "Server", rf.me, "Term", rf.currentTerm, "Leader", args.LeaderId)
+			rf.isReceivedAppendEntries = true
+		}
+	}
+
+	reply.Term = rf.currentTerm
+	reply.Success = isSuccess
 }
 
 // example RequestVote RPC arguments structure.
@@ -128,7 +182,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 type RequestVoteArgs struct {
 	// Your data here (3A, 3B).
 	Term         int
-	CanidateId   int
+	CandidateId  int
 	LastLogIndex int
 	LastLogTerm  int
 }
@@ -144,6 +198,33 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (3A, 3B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	slog.Info("Function RequestVote", "Server", rf.me, "Term", args.Term, "CandidateId", args.CandidateId)
+
+	// Become a follower
+	if args.Term > rf.currentTerm {
+		slog.Debug("becoming a follower", "Server", rf.me, "Term", rf.currentTerm)
+		rf.votedFor = nullVotedFor
+		rf.status = Follower
+		rf.currentTerm = args.Term
+	}
+
+	voteGranted := false
+	// lenLog := len(rf.log)
+	if args.Term < rf.currentTerm {
+		voteGranted = false
+	} else if rf.votedFor == nullVotedFor || rf.votedFor == args.CandidateId {
+		// (rf.log[lenLog-1].Term < args.LastLogTerm || (rf.log[lenLog-1].Term == args.LastLogTerm && lenLog < args.LastLogIndex)) {
+		// QUESTION: Unsure about this: If votedFor is null or candidateId, and candidate’s log is at least as up-to-date as receiver’s log, grant vote (§5.2, §5.4)
+		voteGranted = true
+		rf.votedFor = args.CandidateId
+	}
+
+	slog.Info("Voted For", "Server", rf.me, "Term", args.Term, "voteGrantedTo", voteGranted)
+	reply.Term = rf.currentTerm
+	reply.VoteGranted = voteGranted
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -173,8 +254,36 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // capitalized all field names in structs passed over RPC, and
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
+//
+//	func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
+//		ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+//		return ok
+//	}
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	// Become a follower
+	if reply.Term > rf.currentTerm {
+		slog.Debug("becoming a follower", "Server", rf.me, "Term", rf.currentTerm)
+		rf.votedFor = nullVotedFor
+		rf.status = Follower
+		rf.currentTerm = reply.Term
+	} else {
+		// vote counts if in the same term
+		if reply.Term == args.Term && reply.VoteGranted {
+			rf.numVotesReceived += 1
+		}
+
+		slog.Info("numVotesReceived", "Server", rf.me, "Term", args.Term, "Votes", rf.numVotesReceived)
+		// make into Leader if received sufficient votes
+		if rf.numVotesReceived > len(rf.peers)/2 && rf.status == Candidate {
+			slog.Info("Becoming a leader", "Server", rf.me, "Term", rf.currentTerm)
+			rf.status = Leader
+		}
+	}
 	return ok
 }
 
@@ -199,15 +308,80 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	return index, term, isLeader
 }
 
+func (rf *Raft) startElection() {
+	slog.Debug("Function startElection", "Server", rf.me, "Term", rf.currentTerm)
+	slog.Debug("became candidate", "Server", rf.me, "Term", rf.currentTerm)
+	rf.status = Candidate
+	rf.currentTerm += 1
+	rf.votedFor = rf.me
+	rf.numVotesReceived = 1
+	for server := range rf.peers {
+		if server != rf.me {
+			args := &RequestVoteArgs{Term: rf.currentTerm, CandidateId: rf.me}
+			reply := &RequestVoteReply{}
+			go rf.sendRequestVote(server, args, reply)
+		}
+	}
+
+}
+
 func (rf *Raft) ticker() {
 	for true {
-
-		// Your code here (3A)
-		// Check if a leader election should be started.
-
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
 		ms := 50 + (rand.Int63() % 300)
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+
+		// Your code here (3A)
+		// Check if a leader election should be started.
+		rf.mu.Lock()
+		slog.Debug("Function ticker", "Server", rf.me, "Term", rf.currentTerm)
+		isStartElection := false
+		if !(rf.isReceivedAppendEntries || rf.votedFor != nullVotedFor) {
+			isStartElection = true
+		}
+		rf.isReceivedAppendEntries = false
+
+		if isStartElection && rf.status == Follower {
+			rf.startElection()
+		}
+		rf.mu.Unlock()
+	}
+}
+
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	// convert to Follower
+	if reply.Term > rf.currentTerm {
+		slog.Debug("becoming a follower", "Server", rf.me, "Term", rf.currentTerm)
+		rf.votedFor = nullVotedFor
+		rf.status = Follower
+		rf.currentTerm = reply.Term
+	}
+	return ok
+}
+
+func (rf *Raft) sendHeartbeats() {
+	for true {
+		// Your code here (3A)
+		rf.mu.Lock()
+		slog.Debug("Function sendHeartbeats", "Server", rf.me, "Term", rf.currentTerm)
+		if rf.status == Leader {
+			for server := range rf.peers {
+				if server != rf.me {
+					args := &AppendEntriesArgs{Term: rf.currentTerm, LeaderId: rf.me, Entries: []LogEntries{}, LeaderCommit: rf.commitIndex}
+					reply := &AppendEntriesReply{}
+					go rf.sendAppendEntries(server, args, reply)
+				}
+			}
+		}
+		rf.mu.Unlock()
+		// send heart beats every 10 milliseconds
+		ms := 10
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
 }
@@ -229,12 +403,19 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (3A, 3B, 3C).
+	rf.currentTerm = 0
+	rf.votedFor = nullVotedFor
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+	rf.status = Follower
+	rf.numVotesReceived = 0
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
+	go rf.sendHeartbeats()
 
 	return rf
 }
