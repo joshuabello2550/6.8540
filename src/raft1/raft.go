@@ -96,6 +96,13 @@ func (rf *Raft) persist() {
 	// rf.persister.Save(raftstate, nil)
 }
 
+func (rf *Raft) becomeAFollower(currentTerm int) {
+	slog.Debug("becoming a follower", "Server", rf.me, "Term", currentTerm)
+	rf.votedFor = nullVotedFor
+	rf.status = Follower
+	rf.currentTerm = currentTerm
+}
+
 // restore previously persisted state.
 func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
@@ -154,10 +161,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	if args.Term > rf.currentTerm {
 		// convert to a Follower
-		slog.Debug("becoming a follower", "Server", rf.me, "Term", rf.currentTerm)
-		rf.votedFor = nullVotedFor
-		rf.status = Follower
-		rf.currentTerm = args.Term
+		rf.becomeAFollower(args.Term)
 	}
 
 	isSuccess := false
@@ -205,10 +209,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	// Become a follower
 	if args.Term > rf.currentTerm {
-		slog.Debug("becoming a follower", "Server", rf.me, "Term", rf.currentTerm)
-		rf.votedFor = nullVotedFor
-		rf.status = Follower
-		rf.currentTerm = args.Term
+		rf.becomeAFollower(args.Term)
 	}
 
 	voteGranted := false
@@ -267,10 +268,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 
 	// Become a follower
 	if reply.Term > rf.currentTerm {
-		slog.Debug("becoming a follower", "Server", rf.me, "Term", args.Term)
-		rf.votedFor = nullVotedFor
-		rf.status = Follower
-		rf.currentTerm = reply.Term
+		rf.becomeAFollower(reply.Term)
 	} else {
 		// vote counts if in the same term
 		if reply.Term == args.Term && reply.VoteGranted {
@@ -352,10 +350,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 
 	// convert to Follower
 	if reply.Term > rf.currentTerm {
-		slog.Debug("Becoming a follower", "Server", rf.me, "Term", rf.currentTerm)
-		rf.votedFor = nullVotedFor
-		rf.status = Follower
-		rf.currentTerm = reply.Term
+		rf.becomeAFollower(reply.Term)
 	}
 	return ok
 }
