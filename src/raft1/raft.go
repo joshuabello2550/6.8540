@@ -159,8 +159,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	slog.Debug("Function AppendEntries", "Server", rf.me, "Term", rf.currentTerm)
 
+	// convert to a Follower
 	if args.Term > rf.currentTerm {
-		// convert to a Follower
 		rf.becomeAFollower(args.Term)
 	}
 
