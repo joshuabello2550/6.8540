@@ -22,7 +22,7 @@ import (
 
 type LogEntries struct {
 	Term    int
-	command string
+	Command string
 }
 
 type ServerState int
@@ -57,9 +57,9 @@ type Raft struct {
 	matchIndex []int
 
 	// User defined state
-	status                  ServerState
-	isReceivedAppendEntries bool
-	numVotesReceived        int
+	status           ServerState
+	isStartElection  bool
+	numVotesReceived int
 }
 
 // return currentTerm and whether this server
@@ -152,25 +152,25 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	slog.Debug("Function AppendEntries", "Server", rf.me, "Term", rf.currentTerm)
 
-	isSuccess := false
 	if args.Term > rf.currentTerm {
 		// convert to a Follower
 		slog.Debug("becoming a follower", "Server", rf.me, "Term", rf.currentTerm)
 		rf.votedFor = nullVotedFor
 		rf.status = Follower
 		rf.currentTerm = args.Term
-	} else {
-		if args.Term < rf.currentTerm {
-			isSuccess = false
-		} else {
-			isSuccess = true
-		}
+	}
 
-		// heartbeat
-		if len(args.Entries) == 0 {
-			slog.Debug("received heartbeat", "Server", rf.me, "Term", rf.currentTerm, "Leader", args.LeaderId)
-			rf.isReceivedAppendEntries = true
-		}
+	isSuccess := false
+	if args.Term < rf.currentTerm {
+		isSuccess = false
+	} else {
+		isSuccess = true
+	}
+
+	// heartbeat
+	if len(args.Entries) == 0 {
+		slog.Debug("received heartbeat", "Server", rf.me, "Term", args.Term, "Leader", args.LeaderId)
+		rf.isStartElection = false
 	}
 
 	reply.Term = rf.currentTerm
@@ -201,7 +201,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	slog.Info("Function RequestVote", "Server", rf.me, "Term", args.Term, "CandidateId", args.CandidateId)
+	slog.Debug("Function RequestVote", "Server", rf.me, "Term", args.Term, "CandidateId", args.CandidateId)
 
 	// Become a follower
 	if args.Term > rf.currentTerm {
@@ -217,12 +217,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		voteGranted = false
 	} else if rf.votedFor == nullVotedFor || rf.votedFor == args.CandidateId {
 		// (rf.log[lenLog-1].Term < args.LastLogTerm || (rf.log[lenLog-1].Term == args.LastLogTerm && lenLog < args.LastLogIndex)) {
-		// QUESTION: Unsure about this: If votedFor is null or candidateId, and candidate’s log is at least as up-to-date as receiver’s log, grant vote (§5.2, §5.4)
 		voteGranted = true
 		rf.votedFor = args.CandidateId
+		rf.isStartElection = false
 	}
 
-	slog.Info("Voted For", "Server", rf.me, "Term", args.Term, "voteGrantedTo", voteGranted)
+	slog.Debug("Voted For", "Server", rf.me, "Term", args.Term, "CandidateId", args.CandidateId, "voteGrantedTo", voteGranted, "votedFor", rf.votedFor, "currentTerm", rf.currentTerm)
 	reply.Term = rf.currentTerm
 	reply.VoteGranted = voteGranted
 }
@@ -267,7 +267,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 
 	// Become a follower
 	if reply.Term > rf.currentTerm {
-		slog.Debug("becoming a follower", "Server", rf.me, "Term", rf.currentTerm)
+		slog.Debug("becoming a follower", "Server", rf.me, "Term", args.Term)
 		rf.votedFor = nullVotedFor
 		rf.status = Follower
 		rf.currentTerm = reply.Term
@@ -277,10 +277,10 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 			rf.numVotesReceived += 1
 		}
 
-		slog.Info("numVotesReceived", "Server", rf.me, "Term", args.Term, "Votes", rf.numVotesReceived)
+		slog.Debug("numVotesReceived", "Server", rf.me, "Term", args.Term, "Votes", rf.numVotesReceived)
 		// make into Leader if received sufficient votes
 		if rf.numVotesReceived > len(rf.peers)/2 && rf.status == Candidate {
-			slog.Info("Becoming a leader", "Server", rf.me, "Term", rf.currentTerm)
+			slog.Info("Becoming a leader", "Server", rf.me, "Term", args.Term)
 			rf.status = Leader
 		}
 	}
@@ -336,15 +336,10 @@ func (rf *Raft) ticker() {
 		// Check if a leader election should be started.
 		rf.mu.Lock()
 		slog.Debug("Function ticker", "Server", rf.me, "Term", rf.currentTerm)
-		isStartElection := false
-		if !(rf.isReceivedAppendEntries || rf.votedFor != nullVotedFor) {
-			isStartElection = true
-		}
-		rf.isReceivedAppendEntries = false
-
-		if isStartElection && rf.status == Follower {
+		if rf.isStartElection {
 			rf.startElection()
 		}
+		rf.isStartElection = true
 		rf.mu.Unlock()
 	}
 }
@@ -357,7 +352,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 
 	// convert to Follower
 	if reply.Term > rf.currentTerm {
-		slog.Debug("becoming a follower", "Server", rf.me, "Term", rf.currentTerm)
+		slog.Debug("Becoming a follower", "Server", rf.me, "Term", rf.currentTerm)
 		rf.votedFor = nullVotedFor
 		rf.status = Follower
 		rf.currentTerm = reply.Term
