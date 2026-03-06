@@ -351,44 +351,20 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.log = append(rf.log, entry)
 		rf.nextIndex[rf.me] = index
 		rf.matchIndex[rf.me] = index
-		go rf.StartAgreement(entry, index)
+
+		// start aggreement
+		for server := range rf.peers {
+			if server != rf.me {
+				// slog.Info("StartAgreement", "server", server, "new command", entry)
+				entires := []LogEntries{entry}
+				args := &AppendEntriesArgs{Term: rf.currentTerm, LeaderId: rf.me, Entries: entires, LeaderCommit: rf.commitIndex, PrevLogIndex: index - 1, PrevLogTerm: entires[0].Term}
+				reply := &AppendEntriesReply{}
+				go rf.sendAppendEntries(server, args, reply)
+			}
+		}
+		go rf.updateCommitindex()
 	}
 	return index, term, isLeader
-
-}
-
-func (rf *Raft) StartAgreement(entry LogEntries, index int) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
-	for server := range rf.peers {
-		if server != rf.me {
-			// slog.Info("StartAgreement", "server", server, "new command", entry)
-			entires := []LogEntries{entry}
-			args := &AppendEntriesArgs{Term: rf.currentTerm, LeaderId: rf.me, Entries: entires, LeaderCommit: rf.commitIndex, PrevLogIndex: index - 1, PrevLogTerm: entires[0].Term}
-			reply := &AppendEntriesReply{}
-			go rf.sendAppendEntries(server, args, reply)
-
-		}
-	}
-}
-
-func (rf *Raft) startElection() {
-	slog.Debug("Function startElection", "Server", rf.me, "Term", rf.currentTerm)
-	slog.Debug("became candidate", "Server", rf.me, "Term", rf.currentTerm)
-	rf.status = Candidate
-	rf.currentTerm += 1
-	rf.votedFor = rf.me
-	rf.numVotesReceived = 1
-	for server := range rf.peers {
-		if server != rf.me {
-			lastLogIndex := len(rf.log) - 1
-			lastLogTerm := rf.log[lastLogIndex].Term
-			args := &RequestVoteArgs{Term: rf.currentTerm, CandidateId: rf.me, LastLogIndex: lastLogIndex, LastLogTerm: lastLogTerm}
-			reply := &RequestVoteReply{}
-			go rf.sendRequestVote(server, args, reply)
-		}
-	}
 
 }
 
@@ -404,7 +380,21 @@ func (rf *Raft) ticker() {
 		rf.mu.Lock()
 		slog.Debug("Function ticker", "Server", rf.me, "Term", rf.currentTerm)
 		if rf.isStartElection {
-			rf.startElection()
+			// start election
+			slog.Debug("became candidate", "Server", rf.me, "Term", rf.currentTerm)
+			rf.status = Candidate
+			rf.currentTerm += 1
+			rf.votedFor = rf.me
+			rf.numVotesReceived = 1
+			for server := range rf.peers {
+				if server != rf.me {
+					lastLogIndex := len(rf.log) - 1
+					lastLogTerm := rf.log[lastLogIndex].Term
+					args := &RequestVoteArgs{Term: rf.currentTerm, CandidateId: rf.me, LastLogIndex: lastLogIndex, LastLogTerm: lastLogTerm}
+					reply := &RequestVoteReply{}
+					go rf.sendRequestVote(server, args, reply)
+				}
+			}
 		}
 		rf.isStartElection = true
 		rf.mu.Unlock()
@@ -441,18 +431,20 @@ func (rf *Raft) updateCommitindex() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	// If there exists an N such that N > commitIndex, a majority of matchIndex[i] ≥ N, and log[N].term == currentTerm: set commitIndex = N
-	for N := rf.commitIndex + 1; N < len(rf.log); N++ {
-		numPeersWithEntry := 0
-		for server := range rf.peers {
-			// slog.Info("matchIndex", "server", server, "matchIndex", rf.matchIndex[server], "N", N)
-			if rf.matchIndex[server] >= N {
-				numPeersWithEntry++
+	if rf.status == Leader {
+		// If there exists an N such that N > commitIndex, a majority of matchIndex[i] ≥ N, and log[N].term == currentTerm: set commitIndex = N
+		for N := rf.commitIndex + 1; N < len(rf.log); N++ {
+			numPeersWithEntry := 0
+			for server := range rf.peers {
+				// slog.Info("matchIndex", "server", server, "matchIndex", rf.matchIndex[server], "N", N)
+				if rf.matchIndex[server] >= N {
+					numPeersWithEntry++
+				}
 			}
-		}
-		if numPeersWithEntry > len(rf.peers)/2 && rf.log[N].Term == rf.currentTerm {
-			// slog.Info("updateCommitindex", "server", rf.me, "numPeersWithEntry", numPeersWithEntry, "N", N)
-			rf.commitIndex = N
+			if numPeersWithEntry > len(rf.peers)/2 && rf.log[N].Term == rf.currentTerm {
+				// slog.Info("updateCommitindex", "server", rf.me, "numPeersWithEntry", numPeersWithEntry, "N", N)
+				rf.commitIndex = N
+			}
 		}
 	}
 }
@@ -471,22 +463,14 @@ func (rf *Raft) leaderRepeat() {
 					entries := rf.log[nextIndex : lastLogIndex+1]
 					// slog.Info("leaderRepeat", "lastLogIndex", lastLogIndex, "nextIndex", nextIndex, "prevLogIndex", prevLogIndex, "entries", entries)
 
-					// heartbeats
-					args := &AppendEntriesArgs{Term: rf.currentTerm, LeaderId: rf.me, Entries: []LogEntries{}, LeaderCommit: rf.commitIndex, PrevLogIndex: prevLogIndex, PrevLogTerm: rf.log[prevLogIndex].Term}
+					// If last log index ≥ nextIndex for a follower: send AppendEntries RPC with log entries starting at nextIndex
+					// slog.Info("leaderRepeat", "server", rf.me, "rf.log", rf.log, "nextIndex", nextIndex, "lastLogIndex", lastLogIndex, "entires", entries)
+					args := &AppendEntriesArgs{Term: rf.currentTerm, LeaderId: rf.me, Entries: entries, LeaderCommit: rf.commitIndex, PrevLogIndex: prevLogIndex, PrevLogTerm: rf.log[prevLogIndex].Term}
 					reply := &AppendEntriesReply{}
 					go rf.sendAppendEntries(server, args, reply)
-
-					// If last log index ≥ nextIndex for a follower: send AppendEntries RPC with log entries starting at nextIndex
-					if lastLogIndex >= nextIndex {
-						// slog.Info("leaderRepeat", "server", rf.me, "rf.log", rf.log, "nextIndex", nextIndex, "lastLogIndex", lastLogIndex, "entires", entries)
-						args := &AppendEntriesArgs{Term: rf.currentTerm, LeaderId: rf.me, Entries: entries, LeaderCommit: rf.commitIndex, PrevLogIndex: prevLogIndex, PrevLogTerm: rf.log[prevLogIndex].Term}
-						reply := &AppendEntriesReply{}
-						go rf.sendAppendEntries(server, args, reply)
-					}
-
-					go rf.updateCommitindex()
 				}
 			}
+			go rf.updateCommitindex()
 		}
 
 		rf.mu.Unlock()
@@ -544,8 +528,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	rf.applyCh = applyCh
-
-	// TODO: what is the purpose of applyChannel
 
 	// Your initialization code here (3A, 3B, 3C).
 	rf.currentTerm = 0
