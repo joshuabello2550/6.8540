@@ -20,6 +20,9 @@ import (
 	tester "6.5840/tester1"
 )
 
+var NUM_MILLISECONDS_PER_HEATBEATS = 50
+var NUM_MILLISECONDS_PER_LOOP = NUM_MILLISECONDS_PER_HEATBEATS / 2
+
 type LogEntries struct {
 	Term    int
 	Command interface{}
@@ -295,25 +298,27 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	if ok {
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
 
-	// Become a follower
-	if reply.Term > rf.currentTerm {
-		rf.becomeAFollower(reply.Term)
-	} else {
-		// vote counts if in the same term
-		if reply.Term == args.Term && reply.VoteGranted {
-			rf.numVotesReceived += 1
-		}
+		// Become a follower
+		if reply.Term > rf.currentTerm {
+			rf.becomeAFollower(reply.Term)
+		} else {
+			// vote counts if in the same term
+			if reply.Term == args.Term && reply.VoteGranted {
+				rf.numVotesReceived += 1
+			}
 
-		slog.Debug("numVotesReceived", "Server", rf.me, "Term", args.Term, "Votes", rf.numVotesReceived)
-		// make into Leader if received sufficient votes
-		if rf.numVotesReceived > len(rf.peers)/2 && rf.status == Candidate {
-			rf.initializeNextIndexAndMatchIndex()
+			slog.Debug("numVotesReceived", "Server", rf.me, "Term", args.Term, "Votes", rf.numVotesReceived)
+			// make into Leader if received sufficient votes
+			if rf.numVotesReceived > len(rf.peers)/2 && rf.status == Candidate {
+				rf.initializeNextIndexAndMatchIndex()
 
-			slog.Info("Becoming a leader", "Server", rf.me, "Term", args.Term)
-			rf.status = Leader
+				slog.Info("Becoming a leader", "Server", rf.me, "Term", args.Term)
+				rf.status = Leader
+			}
 		}
 	}
 	return ok
@@ -348,7 +353,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		// slog.Info("Start", "server", rf.me, "new command", command)
 		entry := LogEntries{Term: term, Command: command}
 		// add to log and update nextIndex and matchIndex
-		slog.Info("Start", "server", rf.me, "len log: ", len(rf.log))
+		slog.Debug("Start", "server", rf.me, "len log: ", len(rf.log))
 		rf.log = append(rf.log, entry)
 		rf.nextIndex[rf.me] = index
 		rf.matchIndex[rf.me] = index
@@ -383,7 +388,7 @@ func (rf *Raft) ticker() {
 			rf.currentTerm += 1
 			rf.votedFor = rf.me
 			rf.numVotesReceived = 1
-			slog.Info("starting election: ", "server", rf.me, "currentTerm", rf.currentTerm)
+			slog.Debug("starting election: ", "server", rf.me, "currentTerm", rf.currentTerm)
 			for server := range rf.peers {
 				if server != rf.me {
 					lastLogIndex := len(rf.log) - 1
@@ -398,9 +403,9 @@ func (rf *Raft) ticker() {
 		rf.isStartElection = true
 		rf.mu.Unlock()
 
-		// pause for a random amount of time between 50 and 350
-		// milliseconds.
-		ms := 50 + (rand.Int63() % 300)
+		// pause for a random amount of time between 15x and 30x heartbeat
+		lowerBound := 15 * int64(NUM_MILLISECONDS_PER_HEATBEATS)
+		ms := lowerBound + (rand.Int63() % lowerBound)
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
 }
@@ -408,11 +413,11 @@ func (rf *Raft) ticker() {
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
-	// convert to Follower
 	if ok {
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
+
+		// convert to Follower
 		if reply.Term > rf.currentTerm {
 			rf.becomeAFollower(reply.Term)
 		} else {
@@ -446,9 +451,9 @@ func (rf *Raft) updateCommitindex() {
 					numPeersWithEntry++
 				}
 			}
-			slog.Info("before updateCommitindex", "server", rf.me, "numPeersWithEntry", numPeersWithEntry, "rf.commitIndex", N, "rf.log[N].Term: ", rf.log[N].Term, "rf.currentTerm", rf.currentTerm)
+			slog.Debug("before updateCommitindex", "server", rf.me, "numPeersWithEntry", numPeersWithEntry, "rf.commitIndex", N, "rf.log[N].Term: ", rf.log[N].Term, "rf.currentTerm", rf.currentTerm)
 			if numPeersWithEntry > len(rf.peers)/2 && rf.log[N].Term == rf.currentTerm {
-				slog.Info("updateCommitindex", "server", rf.me, "numPeersWithEntry", numPeersWithEntry, "rf.commitIndex", N, "len log: ", len(rf.log))
+				slog.Debug("updateCommitindex", "server", rf.me, "numPeersWithEntry", numPeersWithEntry, "rf.commitIndex", N, "len log: ", len(rf.log))
 				rf.commitIndex = N
 			}
 		}
@@ -480,9 +485,7 @@ func (rf *Raft) leaderRepeat() {
 		}
 
 		rf.mu.Unlock()
-		// send heart beats every 10 milliseconds
-		ms := 10
-		time.Sleep(time.Duration(ms) * time.Millisecond)
+		time.Sleep(time.Millisecond * time.Duration(NUM_MILLISECONDS_PER_HEATBEATS))
 	}
 }
 
@@ -512,9 +515,7 @@ func (rf *Raft) allRepeat() {
 		}
 
 		rf.mu.Unlock()
-		// send heart beats every 10 milliseconds
-		ms := 10
-		time.Sleep(time.Duration(ms) * time.Millisecond)
+		time.Sleep(time.Millisecond * time.Duration(NUM_MILLISECONDS_PER_LOOP))
 	}
 }
 
