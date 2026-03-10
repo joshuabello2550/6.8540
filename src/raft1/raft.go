@@ -9,12 +9,14 @@ package raft
 
 import (
 	//	"bytes"
+	"bytes"
 	"log/slog"
 	"math/rand"
 	"sync"
 	"time"
 
 	//	"6.5840/labgob"
+	"6.5840/labgob"
 	"6.5840/labrpc"
 	"6.5840/raftapi"
 	tester "6.5840/tester1"
@@ -78,7 +80,7 @@ func (rf *Raft) GetState() (int, bool) {
 
 	term = rf.currentTerm
 	isLeader = rf.status == Leader
-	// slog.Info("GetState: ", "Server", rf.me, "Term", rf.currentTerm, "Status", rf.status)
+	slog.Info("GetState: ", "Server", rf.me, "Term", rf.currentTerm, "Status", rf.status)
 	return term, isLeader
 }
 
@@ -98,6 +100,15 @@ func (rf *Raft) persist() {
 	// e.Encode(rf.yyy)
 	// raftstate := w.Bytes()
 	// rf.persister.Save(raftstate, nil)
+
+	slog.Info("Persisting", "server", rf.me, "currentTerm", rf.currentTerm, "votedFor", rf.votedFor, "log", rf.log)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	raftstate := w.Bytes()
+	rf.persister.Save(raftstate, nil)
 }
 
 func (rf *Raft) becomeAFollower(currentTerm int) {
@@ -105,6 +116,7 @@ func (rf *Raft) becomeAFollower(currentTerm int) {
 	rf.votedFor = nullVotedFor
 	rf.status = Follower
 	rf.currentTerm = currentTerm
+	rf.persist()
 }
 
 // restore previously persisted state.
@@ -125,6 +137,22 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.xxx = xxx
 	//   rf.yyy = yyy
 	// }
+
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currentTerm int
+	var votedFor int
+	var log []LogEntries
+	if d.Decode(&currentTerm) != nil ||
+		d.Decode(&votedFor) != nil ||
+		d.Decode(&log) != nil {
+		slog.Info("Error decoding element", "currentTerm", currentTerm, "votedFor", votedFor, "log", log)
+	} else {
+		slog.Info("Restoring", "server", rf.me, "currentTerm", currentTerm, "votedFor", votedFor, "log", log)
+		rf.currentTerm = currentTerm
+		rf.votedFor = votedFor
+		rf.log = log
+	}
 }
 
 // how many bytes in Raft's persisted log?
@@ -203,6 +231,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			truncateIndex := lastNoConflictEntry + args.PrevLogIndex + 1
 			rf.log = rf.log[:truncateIndex]
 			rf.log = append(rf.log, args.Entries[lastNoConflictEntry:]...)
+			rf.persist()
 		}
 		// If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 		if args.LeaderCommit > rf.commitIndex {
@@ -256,6 +285,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		voteGranted = true
 		rf.votedFor = args.CandidateId
 		rf.isStartElection = false
+		rf.persist()
 	}
 
 	slog.Debug("Voted For", "Server", rf.me, "Term", args.Term, "CandidateId", args.CandidateId, "voteGrantedTo", voteGranted, "votedFor", rf.votedFor, "currentTerm", rf.currentTerm)
@@ -357,6 +387,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.log = append(rf.log, entry)
 		rf.nextIndex[rf.me] = index
 		rf.matchIndex[rf.me] = index
+		rf.persist()
 
 		// start aggreement
 		for server := range rf.peers {
@@ -388,6 +419,7 @@ func (rf *Raft) ticker() {
 			rf.currentTerm += 1
 			rf.votedFor = rf.me
 			rf.numVotesReceived = 1
+			rf.persist()
 			slog.Debug("starting election: ", "server", rf.me, "currentTerm", rf.currentTerm)
 			for server := range rf.peers {
 				if server != rf.me {
