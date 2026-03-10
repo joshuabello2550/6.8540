@@ -80,7 +80,7 @@ func (rf *Raft) GetState() (int, bool) {
 
 	term = rf.currentTerm
 	isLeader = rf.status == Leader
-	slog.Info("GetState: ", "Server", rf.me, "Term", rf.currentTerm, "Status", rf.status)
+	slog.Debug("GetState: ", "Server", rf.me, "Term", rf.currentTerm, "Status", rf.status)
 	return term, isLeader
 }
 
@@ -101,7 +101,7 @@ func (rf *Raft) persist() {
 	// raftstate := w.Bytes()
 	// rf.persister.Save(raftstate, nil)
 
-	slog.Info("Persisting", "server", rf.me, "currentTerm", rf.currentTerm, "votedFor", rf.votedFor, "log", rf.log)
+	slog.Debug("Persisting", "server", rf.me, "currentTerm", rf.currentTerm, "votedFor", rf.votedFor, "log", rf.log)
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(rf.currentTerm)
@@ -146,9 +146,9 @@ func (rf *Raft) readPersist(data []byte) {
 	if d.Decode(&currentTerm) != nil ||
 		d.Decode(&votedFor) != nil ||
 		d.Decode(&log) != nil {
-		slog.Info("Error decoding element", "currentTerm", currentTerm, "votedFor", votedFor, "log", log)
+		slog.Debug("Error decoding element", "currentTerm", currentTerm, "votedFor", votedFor, "log", log)
 	} else {
-		slog.Info("Restoring", "server", rf.me, "currentTerm", currentTerm, "votedFor", votedFor, "log", log)
+		slog.Debug("Restoring", "server", rf.me, "currentTerm", currentTerm, "votedFor", votedFor, "log", log)
 		rf.currentTerm = currentTerm
 		rf.votedFor = votedFor
 		rf.log = log
