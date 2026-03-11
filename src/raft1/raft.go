@@ -22,7 +22,7 @@ import (
 	tester "6.5840/tester1"
 )
 
-var NUM_MILLISECONDS_PER_HEATBEATS = 50
+var NUM_MILLISECONDS_PER_HEATBEATS = 25
 var NUM_MILLISECONDS_PER_LOOP = NUM_MILLISECONDS_PER_HEATBEATS / 2
 
 type LogEntries struct {
@@ -40,6 +40,7 @@ const (
 )
 
 var nullVotedFor = -1
+var NULL_INT = -1
 
 // A Go object implementing a single Raft peer.
 type Raft struct {
@@ -183,6 +184,9 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	Term    int
 	Success bool
+	XTerm   int
+	XIndex  int
+	XLen    int
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -201,15 +205,25 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.becomeAFollower(args.Term)
 	}
 
-	var isSuccess bool
+	var isSuccess bool = false
+	var XTerm int = NULL_INT
+	var XIndex int = NULL_INT
+	var XLen int = NULL_INT
 	// leader term is behind so you can't append anything
-	if (args.Term < rf.currentTerm) ||
-		// log doesn’t contain an entry at prevLogIndex
-		(len(rf.log) <= args.PrevLogIndex || args.PrevLogIndex < 0) ||
-		// whose term does not matches prevLogTerm
-		(rf.log[args.PrevLogIndex].Term != args.PrevLogTerm) {
-		isSuccess = false
+	if args.Term < rf.currentTerm {
+	} else if args.PrevLogIndex >= len(rf.log) || args.PrevLogIndex < 0 {
+		// follower is too short
+		XLen = len(rf.log)
+	} else if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+		// follower's term at index doesn't match
+		XTerm = rf.log[args.PrevLogIndex].Term
+		index := 0
+		for rf.log[index].Term != XTerm {
+			index++
+		}
+		XIndex = index
 	} else {
+		// follower's logs contains a log at PrevLogIndex that matches PrevLogTerm
 		isSuccess = true
 		//  If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it (§5.3)
 		var lastNoConflictEntry int = -1
@@ -241,6 +255,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	reply.Term = rf.currentTerm
 	reply.Success = isSuccess
+	reply.XTerm = XTerm
+	reply.XIndex = XIndex
+	reply.XLen = XLen
 }
 
 // example RequestVote RPC arguments structure.
@@ -460,13 +477,47 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 				rf.matchIndex[server] = rf.nextIndex[server] - 1
 			} else {
 				// If AppendEntries fails because of log inconsistency decrement nextIndex and retry
-				rf.nextIndex[server] -= 1
-				rf.nextIndex[server] = max(rf.nextIndex[server], 1)
+				slog.Debug("failed append entry", "leader", rf.me, "server", server, "XTerm", reply.XTerm, "XIndex", reply.XIndex, "XLen", reply.XLen)
+				var nextIndex int
+				// follower's log is too short
+				if reply.XLen != NULL_INT {
+					nextIndex = reply.XLen
+				} else if rf.getIsHaveTerm(reply.Term) {
+					nextIndex = reply.XIndex
+				} else {
+					nextIndex = rf.getLastIndexWithTerm(reply.Term) + 1
+				}
+				nextIndex = max(nextIndex, 1)
+				slog.Debug("nextIndex", "server", rf.me, "nextIndex", nextIndex)
+				rf.nextIndex[server] = nextIndex
+				// rf.nextIndex[server] -= 1
 			}
 		}
 	}
 
 	return ok
+}
+
+func (rf *Raft) getIsHaveTerm(term int) bool {
+	index := 0
+	for index < len(rf.log) {
+		if rf.log[index].Term == term {
+			return true
+		}
+		index++
+	}
+	return false
+}
+
+func (rf *Raft) getLastIndexWithTerm(term int) int {
+	index := len(rf.log) - 1
+	for index > 0 {
+		if rf.log[index].Term == term {
+			break
+		}
+		index--
+	}
+	return index
 }
 
 func (rf *Raft) updateCommitindex() {
