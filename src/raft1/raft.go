@@ -10,6 +10,7 @@ package raft
 import (
 	//	"bytes"
 	"bytes"
+	"io"
 	"log/slog"
 	"math/rand"
 	"sync"
@@ -22,8 +23,10 @@ import (
 	tester "6.5840/tester1"
 )
 
-var NUM_MILLISECONDS_PER_HEATBEATS = 25
-var NUM_MILLISECONDS_PER_LOOP = NUM_MILLISECONDS_PER_HEATBEATS / 2
+// look into match index increasing monitonically
+// unsatable leader
+var NUM_MILLISECONDS_PER_HEATBEATS = 50
+var NUM_MILLISECONDS_PER_LOOP = NUM_MILLISECONDS_PER_HEATBEATS / 5
 
 type LogEntries struct {
 	Term    int
@@ -586,19 +589,23 @@ func (rf *Raft) allRepeat() {
 	for true {
 		rf.mu.Lock()
 		// All servers: If commitIndex > lastApplied: increment lastApplied, apply log[lastApplied] to state machine
-		// slog.Info("sending applying Msg", "rf.commitIndex", rf.commitIndex, "rf.lastApplied", rf.lastApplied)
 		if rf.commitIndex > rf.lastApplied {
 			commitIndex := rf.lastApplied + 1
+			rf.lastApplied++
+			command := rf.log[commitIndex].Command
+			// slog.Info("sending applying Msg", "rf.commitIndex", rf.commitIndex, "rf.lastApplied", rf.lastApplied, "command", rf.log[commitIndex].Command)
+			rf.mu.Unlock()
+
 			rf.applyCh <- raftapi.ApplyMsg{
 				CommandValid: true,
-				Command:      rf.log[commitIndex].Command,
+				Command:      command,
 				CommandIndex: commitIndex,
 			}
-			rf.lastApplied++
+		} else {
+			rf.mu.Unlock()
+			time.Sleep(time.Millisecond * time.Duration(NUM_MILLISECONDS_PER_LOOP))
 		}
 
-		rf.mu.Unlock()
-		time.Sleep(time.Millisecond * time.Duration(NUM_MILLISECONDS_PER_LOOP))
 	}
 }
 
@@ -613,6 +620,9 @@ func (rf *Raft) allRepeat() {
 // for any long-running work.
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *tester.Persister, applyCh chan raftapi.ApplyMsg) raftapi.Raft {
+	var logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	slog.SetDefault(logger)
+
 	rf := &Raft{}
 	rf.peers = peers
 	rf.persister = persister
@@ -636,6 +646,5 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.ticker()
 	go rf.leaderRepeat()
 	go rf.allRepeat()
-
 	return rf
 }
