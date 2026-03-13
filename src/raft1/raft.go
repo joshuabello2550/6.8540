@@ -585,27 +585,41 @@ func (rf *Raft) initializeNextIndexAndMatchIndex() {
 
 }
 
+type ApplyMsg struct {
+	CommandValid bool
+	Command      interface{}
+	CommandIndex int
+}
+
 func (rf *Raft) allRepeat() {
 	for true {
 		rf.mu.Lock()
 		// All servers: If commitIndex > lastApplied: increment lastApplied, apply log[lastApplied] to state machine
-		if rf.commitIndex > rf.lastApplied {
+		// create a list of all the the entires that need to be applied
+		applyMsgs := make([]raftapi.ApplyMsg, 0)
+		// slog.Info("sending applying Msg", "rf.commitIndex", rf.commitIndex, "rf.lastApplied", rf.lastApplied, "command", rf.log[commitIndex].Command)
+		for rf.lastApplied < rf.commitIndex {
 			commitIndex := rf.lastApplied + 1
-			rf.lastApplied++
 			command := rf.log[commitIndex].Command
-			// slog.Info("sending applying Msg", "rf.commitIndex", rf.commitIndex, "rf.lastApplied", rf.lastApplied, "command", rf.log[commitIndex].Command)
-			rf.mu.Unlock()
-
-			rf.applyCh <- raftapi.ApplyMsg{
+			applyMsgs = append(applyMsgs, raftapi.ApplyMsg{
 				CommandValid: true,
 				Command:      command,
 				CommandIndex: commitIndex,
-			}
-		} else {
-			rf.mu.Unlock()
-			time.Sleep(time.Millisecond * time.Duration(NUM_MILLISECONDS_PER_LOOP))
+			})
+			rf.lastApplied++
 		}
+		rf.mu.Unlock()
+		if len(applyMsgs) > 0 {
+			rf.applyEntries(applyMsgs)
+		}
+		time.Sleep(time.Millisecond * time.Duration(NUM_MILLISECONDS_PER_LOOP))
+	}
+}
 
+func (rf *Raft) applyEntries(applyMsgs []raftapi.ApplyMsg) {
+	// apply all the messages in applyMsgs
+	for _, msg := range applyMsgs {
+		rf.applyCh <- msg
 	}
 }
 
