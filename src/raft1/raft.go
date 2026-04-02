@@ -769,7 +769,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// values if there is no saved state
 	rf.snapshotTerm = 0
 	rf.snapshotIndex = 0
-
 	rf.log = []LogEntries{{Term: 0}}
 
 	// initialize from state persisted before a crash
@@ -777,7 +776,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.snapshot = persister.ReadSnapshot()
 
 	// Your initialization code here (3A, 3B, 3C).
-	rf.currentTerm = rf.snapshotTerm
 	rf.commitIndex = rf.snapshotIndex
 	rf.lastApplied = rf.snapshotIndex
 
