@@ -789,3 +789,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.allRepeat()
 	return rf
 }
+
+func (rf *Raft) Kill() {
+	close(rf.applyCh)
+}

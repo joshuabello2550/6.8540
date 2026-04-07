@@ -1,22 +1,26 @@
 package rsm
 
 import (
+	"log/slog"
+	"os"
 	"sync"
 
 	"6.5840/kvsrv1/rpc"
 	"6.5840/labrpc"
-	"6.5840/raft1"
+	raft "6.5840/raft1"
 	"6.5840/raftapi"
-	"6.5840/tester1"
-
+	tester "6.5840/tester1"
+	"github.com/google/uuid" // QUESTION: Is it safe to use this?
 )
 
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	Me  int
+	Id  string
+	Req any
 }
-
 
 // A server (i.e., ../server.go) that wants to replicate itself calls
 // MakeRSM and must implement the StateMachine interface.  This
@@ -38,6 +42,7 @@ type RSM struct {
 	maxraftstate int // snapshot if log grows this big
 	sm           StateMachine
 	// Your definitions here.
+	commands map[string]chan any
 }
 
 // servers[] contains the ports of the set of
@@ -61,10 +66,12 @@ func MakeRSM(servers []*labrpc.ClientEnd, me int, persister *tester.Persister, m
 		maxraftstate: maxraftstate,
 		applyCh:      make(chan raftapi.ApplyMsg),
 		sm:           sm,
+		commands:     make(map[string]chan any),
 	}
 	if !tester.UseRaftStateMachine {
 		rsm.rf = raft.Make(servers, me, persister, rsm.applyCh)
 	}
+	go rsm.readerGoroutine()
 	return rsm
 }
 
@@ -72,16 +79,62 @@ func (rsm *RSM) Raft() raftapi.Raft {
 	return rsm.rf
 }
 
+func (rsm *RSM) readerGoroutine() {
+	for {
+		applyMsg, ok := <-rsm.applyCh
+		if !ok {
+			break
+		}
+
+		slog.Info("readerGoroutine", "received applyMsg", applyMsg)
+		req := applyMsg.Command.(Op).Req
+		id := applyMsg.Command.(Op).Id
+		me := applyMsg.Command.(Op).Me
+
+		doOpResult := rsm.sm.DoOp(req)
+
+		if rsm.me == me {
+			rsm.commands[id] <- doOpResult
+		}
+
+	}
+}
 
 // Submit a command to Raft, and wait for it to be committed.  It
 // should return ErrWrongLeader if client should find new leader and
 // try again.
 func (rsm *RSM) Submit(req any) (rpc.Err, any) {
+	slog.Info("Submit", "req", req)
 
 	// Submit creates an Op structure to run a command through Raft;
 	// for example: op := Op{Me: rsm.me, Id: id, Req: req}, where req
 	// is the argument to Submit and id is a unique id for the op.
 
 	// your code here
-	return rpc.ErrWrongLeader, nil // i'm dead, try another server.
+	rsm.mu.Lock()
+	defer rsm.mu.Unlock()
+
+	id := uuid.New().String()
+	op := Op{Me: rsm.me, Id: id, Req: req}
+
+	rsm.commands[id] = make(chan any)
+
+	_, _, isLeader := rsm.rf.Start(op)
+	if !isLeader {
+		close(rsm.commands[id])
+		return rpc.ErrWrongLeader, nil // i'm dead, try another server.
+	}
+
+	doOpResult := <-rsm.commands[id]
+	close(rsm.commands[id])
+	return rpc.OK, doOpResult
+
+}
+
+func init() {
+	opts := &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}
+	var logger = slog.New(slog.NewTextHandler(os.Stdout, opts))
+	slog.SetDefault(logger)
 }
