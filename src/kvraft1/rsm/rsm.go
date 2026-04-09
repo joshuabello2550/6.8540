@@ -17,7 +17,6 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	Me  int
 	Id  string
 	Req any
 }
@@ -34,6 +33,11 @@ type StateMachine interface {
 	Restore([]byte)
 }
 
+type ExpectedValues struct {
+	expectedLogIndex int
+	expectedTerm     int
+}
+
 type RSM struct {
 	mu           sync.Mutex
 	me           int
@@ -42,7 +46,9 @@ type RSM struct {
 	maxraftstate int // snapshot if log grows this big
 	sm           StateMachine
 	// Your definitions here.
-	commands map[string]chan any
+	commands           map[string]chan any
+	expectedValues     map[string]ExpectedValues
+	haveLostLeadership map[string]bool
 }
 
 // servers[] contains the ports of the set of
@@ -61,12 +67,20 @@ type RSM struct {
 // MakeRSM() must return quickly, so it should start goroutines for
 // any long-running work.
 func MakeRSM(servers []*labrpc.ClientEnd, me int, persister *tester.Persister, maxraftstate int, sm StateMachine) *RSM {
+	opts := &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}
+	var logger = slog.New(slog.NewTextHandler(os.Stdout, opts))
+	slog.SetDefault(logger)
+
 	rsm := &RSM{
-		me:           me,
-		maxraftstate: maxraftstate,
-		applyCh:      make(chan raftapi.ApplyMsg),
-		sm:           sm,
-		commands:     make(map[string]chan any),
+		me:                 me,
+		maxraftstate:       maxraftstate,
+		applyCh:            make(chan raftapi.ApplyMsg),
+		sm:                 sm,
+		commands:           make(map[string]chan any),
+		expectedValues:     make(map[string]ExpectedValues),
+		haveLostLeadership: make(map[string]bool),
 	}
 	if !tester.UseRaftStateMachine {
 		rsm.rf = raft.Make(servers, me, persister, rsm.applyCh)
@@ -82,6 +96,7 @@ func (rsm *RSM) Raft() raftapi.Raft {
 func (rsm *RSM) readerGoroutine() {
 	for {
 		applyMsg, ok := <-rsm.applyCh
+		// stop the infinte loop if the raft server is shutdown
 		if !ok {
 			break
 		}
@@ -89,14 +104,24 @@ func (rsm *RSM) readerGoroutine() {
 		slog.Info("readerGoroutine", "received applyMsg", applyMsg)
 		req := applyMsg.Command.(Op).Req
 		id := applyMsg.Command.(Op).Id
-		me := applyMsg.Command.(Op).Me
+
+		rsm.mu.Lock()
+		expectedLogIndex := rsm.expectedValues[id].expectedLogIndex
+		expectedTerm := rsm.expectedValues[id].expectedTerm
+		currentTerm, _ := rsm.rf.GetState()
+		channel := rsm.commands[id]
+		rsm.mu.Unlock()
 
 		doOpResult := rsm.sm.DoOp(req)
-
-		if rsm.me == me {
-			rsm.commands[id] <- doOpResult
+		if channel != nil {
+			// is not the leader as the index of the command is in the wrong place or the term has changed
+			if applyMsg.CommandIndex != expectedLogIndex || expectedTerm != currentTerm {
+				rsm.mu.Lock()
+				rsm.haveLostLeadership[id] = true
+				rsm.mu.Unlock()
+			}
+			channel <- doOpResult
 		}
-
 	}
 }
 
@@ -111,24 +136,40 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 	// is the argument to Submit and id is a unique id for the op.
 
 	// your code here
-	rsm.mu.Lock()
-	defer rsm.mu.Unlock()
-
 	id := uuid.New().String()
-	op := Op{Me: rsm.me, Id: id, Req: req}
+	op := Op{Id: id, Req: req}
 
-	rsm.commands[id] = make(chan any)
+	rsm.mu.Lock()
 
-	_, _, isLeader := rsm.rf.Start(op)
+	channel := make(chan any)
+	rsm.commands[id] = channel
+	rsm.haveLostLeadership[id] = false
+
+	expectedLogIndex, expectedTerm, isLeader := rsm.rf.Start(op)
 	if !isLeader {
-		close(rsm.commands[id])
+		close(channel)
+		rsm.mu.Unlock()
 		return rpc.ErrWrongLeader, nil // i'm dead, try another server.
 	}
 
-	doOpResult := <-rsm.commands[id]
-	close(rsm.commands[id])
-	return rpc.OK, doOpResult
+	rsm.expectedValues[id] = ExpectedValues{
+		expectedLogIndex: expectedLogIndex,
+		expectedTerm:     expectedTerm,
+	}
 
+	rsm.mu.Unlock()
+
+	doOpResult := <-channel
+
+	rsm.mu.Lock()
+	defer rsm.mu.Unlock()
+
+	close(channel)
+	if rsm.haveLostLeadership[id] {
+		return rpc.ErrWrongLeader, nil // i'm dead, try another server.
+	} else {
+		return rpc.OK, doOpResult
+	}
 }
 
 func init() {
