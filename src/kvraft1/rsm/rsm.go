@@ -1,9 +1,11 @@
 package rsm
 
 import (
+	"bufio"
 	"log/slog"
 	"os"
 	"sync"
+	"time"
 
 	"6.5840/kvsrv1/rpc"
 	"6.5840/labrpc"
@@ -49,6 +51,7 @@ type RSM struct {
 	commands           map[string]chan any
 	expectedValues     map[string]ExpectedValues
 	haveLostLeadership map[string]bool
+	logIndexToId       map[int]string
 }
 
 // servers[] contains the ports of the set of
@@ -81,11 +84,13 @@ func MakeRSM(servers []*labrpc.ClientEnd, me int, persister *tester.Persister, m
 		commands:           make(map[string]chan any),
 		expectedValues:     make(map[string]ExpectedValues),
 		haveLostLeadership: make(map[string]bool),
+		logIndexToId:       make(map[int]string),
 	}
 	if !tester.UseRaftStateMachine {
 		rsm.rf = raft.Make(servers, me, persister, rsm.applyCh)
 	}
 	go rsm.readerGoroutine()
+	go rsm.isLeader()
 	return rsm
 }
 
@@ -105,19 +110,22 @@ func (rsm *RSM) readerGoroutine() {
 		req := applyMsg.Command.(Op).Req
 		id := applyMsg.Command.(Op).Id
 
+		doOpResult := rsm.sm.DoOp(req)
+
 		rsm.mu.Lock()
 		expectedLogIndex := rsm.expectedValues[id].expectedLogIndex
 		expectedTerm := rsm.expectedValues[id].expectedTerm
 		currentTerm, _ := rsm.rf.GetState()
-		channel := rsm.commands[id]
+		// the channelId may be different that the Op id if the channelId's server lost leadership
+		channelId := rsm.logIndexToId[applyMsg.CommandIndex]
+		channel := rsm.commands[channelId]
 		rsm.mu.Unlock()
 
-		doOpResult := rsm.sm.DoOp(req)
 		if channel != nil {
 			// is not the leader as the index of the command is in the wrong place or the term has changed
-			if applyMsg.CommandIndex != expectedLogIndex || expectedTerm != currentTerm {
+			if channelId != id || applyMsg.CommandIndex != expectedLogIndex || expectedTerm != currentTerm {
 				rsm.mu.Lock()
-				rsm.haveLostLeadership[id] = true
+				rsm.haveLostLeadership[channelId] = true
 				rsm.mu.Unlock()
 			}
 			channel <- doOpResult
@@ -125,11 +133,32 @@ func (rsm *RSM) readerGoroutine() {
 	}
 }
 
+func (rsm *RSM) isLeader() {
+	for {
+		_, isLeader := rsm.rf.GetState()
+		if !isLeader {
+			// if no longer the leader close all pending channels
+			rsm.mu.Lock()
+			// fmt.Println("isLeader", "server: ", rsm.me, "rsm.commands: ", rsm.commands)
+			for channelId, channel := range rsm.commands {
+				rsm.haveLostLeadership[channelId] = true
+				if channel != nil {
+					channel <- ""
+				}
+			}
+			rsm.mu.Unlock()
+		}
+		time.Sleep(time.Millisecond * 100)
+	}
+}
+
 // Submit a command to Raft, and wait for it to be committed.  It
 // should return ErrWrongLeader if client should find new leader and
 // try again.
 func (rsm *RSM) Submit(req any) (rpc.Err, any) {
-	slog.Info("Submit", "req", req)
+	writer := bufio.NewWriter(os.Stdout)
+	writer.Flush()
+	// slog.Info("Submit", "req", req)
 
 	// Submit creates an Op structure to run a command through Raft;
 	// for example: op := Op{Me: rsm.me, Id: id, Req: req}, where req
@@ -139,19 +168,18 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 	id := uuid.New().String()
 	op := Op{Id: id, Req: req}
 
-	rsm.mu.Lock()
+	expectedLogIndex, expectedTerm, isLeader := rsm.rf.Start(op)
+	// fmt.Println("Submit", "server: ", rsm.me, "isLeader: ", isLeader, "req: ", req, "expectedLogIndex: ", expectedLogIndex, "expectedTerm: ", expectedTerm)
+	if !isLeader {
+		return rpc.ErrWrongLeader, nil // i'm dead, try another server.
+	}
 
+	rsm.mu.Lock()
 	channel := make(chan any)
 	rsm.commands[id] = channel
 	rsm.haveLostLeadership[id] = false
 
-	expectedLogIndex, expectedTerm, isLeader := rsm.rf.Start(op)
-	if !isLeader {
-		close(channel)
-		rsm.mu.Unlock()
-		return rpc.ErrWrongLeader, nil // i'm dead, try another server.
-	}
-
+	rsm.logIndexToId[expectedLogIndex] = id
 	rsm.expectedValues[id] = ExpectedValues{
 		expectedLogIndex: expectedLogIndex,
 		expectedTerm:     expectedTerm,
@@ -164,6 +192,8 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 	rsm.mu.Lock()
 	defer rsm.mu.Unlock()
 
+	// respond to client after receiving response from raft
+	delete(rsm.commands, id)
 	close(channel)
 	if rsm.haveLostLeadership[id] {
 		return rpc.ErrWrongLeader, nil // i'm dead, try another server.
