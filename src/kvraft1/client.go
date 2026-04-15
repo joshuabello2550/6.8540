@@ -1,17 +1,19 @@
 package kvraft
 
 import (
-	"6.5840/kvsrv1/rpc"
-	"6.5840/kvtest1"
-	"6.5840/tester1"
-)
+	"time"
 
+	"6.5840/kvsrv1/rpc"
+	kvtest "6.5840/kvtest1"
+	tester "6.5840/tester1"
+)
 
 type Clerk struct {
 	clnt    *tester.Clnt
 	servers []string
-	leader int // last successful leader (index into servers[])
+	leader  int // last successful leader (index into servers[])
 	// You can add to this struct.
+	isfirst bool
 }
 
 func MakeClerk(clnt *tester.Clnt, servers []string) kvtest.IKVClerk {
@@ -37,7 +39,23 @@ func (ck *Clerk) Leader() int {
 func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 
 	// You will have to modify this function.
-	return "", 0, ""
+	args := rpc.GetArgs{Key: key}
+	for {
+		// iterate through all the servers to determine the server
+		for idx := range len(ck.servers) {
+			// Trick to always start from leader
+			i := (ck.leader + idx) % len(ck.servers)
+			reply := rpc.GetReply{}
+			ok := ck.clnt.Call(ck.servers[i], "KVServer.Get", &args, &reply)
+			if ok && reply.Err != rpc.ErrWrongLeader {
+				if reply.Err == rpc.ErrNoKey || reply.Err == rpc.OK {
+					ck.leader = i
+					return reply.Value, reply.Version, reply.Err
+				}
+			}
+		}
+		time.Sleep(0 * time.Millisecond)
+	}
 }
 
 // Put updates key with value only if the version in the
@@ -59,5 +77,24 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 // arguments. Additionally, reply must be passed as a pointer.
 func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 	// You will have to modify this function.
-	return ""
+	args := rpc.PutArgs{Key: key, Value: value, Version: version}
+	for {
+		for idx := range len(ck.servers) {
+			// Trick to always start from leader
+			i := (ck.leader + idx) % len(ck.servers)
+			reply := rpc.PutReply{}
+			ok := ck.clnt.Call(ck.servers[i], "KVServer.Put", &args, &reply)
+			if ok && reply.Err != rpc.ErrWrongLeader {
+				if reply.Err == rpc.ErrVersion && !ck.isfirst {
+					ck.isfirst = true
+					return rpc.ErrMaybe
+				} else {
+					ck.isfirst = true
+					return reply.Err
+				}
+			}
+			ck.isfirst = false
+		}
+		time.Sleep(0 * time.Millisecond)
+	}
 }
