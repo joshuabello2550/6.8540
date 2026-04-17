@@ -325,9 +325,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	var XTerm int = NULL_INT
 	var XIndex int = NULL_INT
 	var XLen int = NULL_INT
-	// leader term is behind so you can't append anything
+
 	if args.Term < rf.currentTerm {
-	} else if args.PrevLogIndex >= rf.getLogicalIndex(len(rf.log)) || args.PrevLogIndex < 0 {
+		// leader term is behind so you can't append anything
+	} else if rf.getPhysicalIndex(args.PrevLogIndex) < 0 || args.PrevLogIndex >= rf.getLogicalIndex(len(rf.log)) || args.PrevLogIndex < 0 {
 		// follower is too short
 		XLen = rf.getLogicalIndex(len(rf.log))
 	} else if rf.log[rf.getPhysicalIndex(args.PrevLogIndex)].Term != args.PrevLogTerm {
@@ -530,7 +531,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 				go rf.sendAppendEntries(server, args, reply)
 			}
 		}
-		go rf.updateCommitindex()
 	}
 	return index, term, isLeader
 
@@ -591,6 +591,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 				rf.nextIndex[server] = rf.matchIndex[server] + 1
 
 				slog.Info("successfull appendedEntires", "server", server, "nextIndex", rf.nextIndex[server], "matchIndex[", rf.matchIndex[server])
+				go rf.updateCommitindex()
 			} else {
 				// If AppendEntries fails because of log inconsistency decrement nextIndex and retry
 				slog.Debug("failed append entry", "leader", rf.me, "server", server, "XTerm", reply.XTerm, "XIndex", reply.XIndex, "XLen", reply.XLen)
@@ -687,7 +688,6 @@ func (rf *Raft) leaderRepeat() {
 
 				}
 			}
-			go rf.updateCommitindex()
 		}
 
 		rf.mu.Unlock()

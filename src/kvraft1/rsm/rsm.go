@@ -108,8 +108,8 @@ func (rsm *RSM) Raft() raftapi.Raft {
 }
 
 func (rsm *RSM) saveSnapShot() {
-	// save snapshot whenever size of raft is within 5 bytes
-	if rsm.maxraftstate < rsm.rf.PersistBytes()-5 {
+	// save snapshot whenever size of raft is within 5 bytes and maxraftstate is not -1
+	if rsm.maxraftstate != -1 && rsm.maxraftstate < rsm.rf.PersistBytes()-5 {
 		snapshot := rsm.sm.Snapshot()
 		rsm.rf.Snapshot(rsm.latestCommitIndex, snapshot)
 	}
@@ -167,9 +167,8 @@ func (rsm *RSM) readerGoroutine() {
 				channel <- doOpResult
 			}
 
+			rsm.saveSnapShot()
 		}
-
-		rsm.saveSnapShot() // TODO: may be an issue where you save the snapshot before and then trie to read form it before it has been applied
 	}
 }
 
