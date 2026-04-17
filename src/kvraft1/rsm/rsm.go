@@ -52,6 +52,7 @@ type RSM struct {
 	expectedValues     map[string]ExpectedValues
 	haveLostLeadership map[string]bool
 	logIndexToId       map[int]string
+	latestCommitIndex  int
 }
 
 // servers[] contains the ports of the set of
@@ -89,6 +90,14 @@ func MakeRSM(servers []*labrpc.ClientEnd, me int, persister *tester.Persister, m
 	if !tester.UseRaftStateMachine {
 		rsm.rf = raft.Make(servers, me, persister, rsm.applyCh)
 	}
+
+	// when a rsm server restarts, it should read the snapshot and, if the snapshot's length is greater than zero,
+	// pass the snapshot to the StateMachine's Restore()
+	snapshot := persister.ReadSnapshot()
+	if len(snapshot) > 0 {
+		sm.Restore(snapshot)
+	}
+
 	go rsm.readerGoroutine()
 	go rsm.isLeader()
 	return rsm
@@ -96,6 +105,14 @@ func MakeRSM(servers []*labrpc.ClientEnd, me int, persister *tester.Persister, m
 
 func (rsm *RSM) Raft() raftapi.Raft {
 	return rsm.rf
+}
+
+func (rsm *RSM) saveSnapShot() {
+	// save snapshot whenever size of raft is within 5 bytes
+	if rsm.maxraftstate < rsm.rf.PersistBytes()-5 {
+		snapshot := rsm.sm.Snapshot()
+		rsm.rf.Snapshot(rsm.latestCommitIndex, snapshot)
+	}
 }
 
 func (rsm *RSM) readerGoroutine() {
@@ -106,30 +123,53 @@ func (rsm *RSM) readerGoroutine() {
 			break
 		}
 
-		slog.Info("readerGoroutine", "received applyMsg", applyMsg)
-		req := applyMsg.Command.(Op).Req
-		id := applyMsg.Command.(Op).Id
-
-		doOpResult := rsm.sm.DoOp(req)
-
-		rsm.mu.Lock()
-		expectedLogIndex := rsm.expectedValues[id].expectedLogIndex
-		expectedTerm := rsm.expectedValues[id].expectedTerm
-		currentTerm, _ := rsm.rf.GetState()
-		// the channelId may be different that the Op id if the channelId's server lost leadership
-		channelId := rsm.logIndexToId[applyMsg.CommandIndex]
-		channel := rsm.commands[channelId]
-		rsm.mu.Unlock()
-
-		if channel != nil {
-			// is not the leader as the index of the command is in the wrong place or the term has changed
-			if channelId != id || applyMsg.CommandIndex != expectedLogIndex || expectedTerm != currentTerm {
-				rsm.mu.Lock()
-				rsm.haveLostLeadership[channelId] = true
-				rsm.mu.Unlock()
-			}
-			channel <- doOpResult
+		if applyMsg.SnapshotValid && applyMsg.CommandValid {
+			panic("SnapshotValid and CommandValid should never be both true")
 		}
+
+		if applyMsg.SnapshotValid {
+			// TODO: may need to pass more values to Restore
+			snapshot := applyMsg.Snapshot
+			rsm.sm.Restore(snapshot)
+
+			rsm.mu.Lock()
+			rsm.latestCommitIndex = applyMsg.SnapshotIndex
+			if applyMsg.SnapshotIndex < rsm.latestCommitIndex {
+				panic("snapshotIndex should never be less than the latestCommitIndex")
+			}
+			rsm.mu.Unlock()
+		}
+
+		if applyMsg.CommandValid {
+			slog.Info("readerGoroutine", "received applyMsg", applyMsg)
+			req := applyMsg.Command.(Op).Req
+			id := applyMsg.Command.(Op).Id
+
+			doOpResult := rsm.sm.DoOp(req)
+
+			rsm.mu.Lock()
+			expectedLogIndex := rsm.expectedValues[id].expectedLogIndex
+			expectedTerm := rsm.expectedValues[id].expectedTerm
+			currentTerm, _ := rsm.rf.GetState()
+			// the channelId may be different that the Op id if the channelId's server lost leadership
+			channelId := rsm.logIndexToId[applyMsg.CommandIndex]
+			channel := rsm.commands[channelId]
+			rsm.latestCommitIndex = applyMsg.CommandIndex
+			rsm.mu.Unlock()
+
+			if channel != nil {
+				// is not the leader as the index of the command is in the wrong place or the term has changed
+				if channelId != id || applyMsg.CommandIndex != expectedLogIndex || expectedTerm != currentTerm {
+					rsm.mu.Lock()
+					rsm.haveLostLeadership[channelId] = true
+					rsm.mu.Unlock()
+				}
+				channel <- doOpResult
+			}
+
+		}
+
+		rsm.saveSnapShot() // TODO: may be an issue where you save the snapshot before and then trie to read form it before it has been applied
 	}
 }
 
@@ -148,7 +188,7 @@ func (rsm *RSM) isLeader() {
 			}
 			rsm.mu.Unlock()
 		}
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 10)
 	}
 }
 

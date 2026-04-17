@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"bytes"
 	"fmt"
 	"sync"
 
@@ -20,8 +21,13 @@ type KVServer struct {
 }
 
 type Record struct {
-	value   string
-	version rpc.Tversion
+	Value   string
+	Version rpc.Tversion
+}
+
+type Snapshot struct {
+	Records map[string]*Record
+	Index   int
 }
 
 // To type-cast req to the right type, take a look at Go's type switches or type
@@ -42,8 +48,8 @@ func (kv *KVServer) DoOp(req any) any {
 		record, ok := kv.records[key]
 		if ok {
 			reply.Err = rpc.OK
-			reply.Value = record.value
-			reply.Version = record.version
+			reply.Value = record.Value
+			reply.Version = record.Version
 		} else {
 			reply.Err = rpc.ErrNoKey
 		}
@@ -57,12 +63,12 @@ func (kv *KVServer) DoOp(req any) any {
 		// key in record
 		if ok {
 			// version don't match
-			if record.version != version {
+			if record.Version != version {
 				reply.Err = rpc.ErrVersion
 			} else {
 				reply.Err = rpc.OK
-				kv.records[key].value = value
-				kv.records[key].version += 1
+				kv.records[key].Value = value
+				kv.records[key].Version += 1
 			}
 		} else {
 			// add record if first entry
@@ -71,7 +77,7 @@ func (kv *KVServer) DoOp(req any) any {
 			} else {
 
 				reply.Err = rpc.OK
-				newRecord := Record{value: value, version: version + 1}
+				newRecord := Record{Value: value, Version: version + 1}
 				kv.records[key] = &newRecord
 			}
 
@@ -83,11 +89,30 @@ func (kv *KVServer) DoOp(req any) any {
 
 func (kv *KVServer) Snapshot() []byte {
 	// Your code here
-	return nil
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	snapshot := Snapshot{Records: kv.records}
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(snapshot)
+	bytes := w.Bytes()
+	return bytes
 }
 
 func (kv *KVServer) Restore(data []byte) {
 	// Your code here
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var snapshot Snapshot
+	if d.Decode(&snapshot) != nil {
+		fmt.Println("Error decoding element", "records", snapshot)
+	} else {
+		kv.records = snapshot.Records
+	}
 }
 
 func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {

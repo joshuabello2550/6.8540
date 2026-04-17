@@ -358,7 +358,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 		// Append any new entries not already in the log
 		if lastNoConflictEntry != -1 {
-			truncateIndex := rf.getPhysicalIndex(lastNoConflictEntry) + rf.getPhysicalIndex(args.PrevLogIndex) + 1 // TODO: Think its correct but could be wrong
+			truncateIndex := rf.getPhysicalIndex(lastNoConflictEntry) + rf.getPhysicalIndex(args.PrevLogIndex) + 1
 			rf.log = rf.log[:truncateIndex]
 			rf.log = append(rf.log, args.Entries[rf.getPhysicalIndex(lastNoConflictEntry):]...)
 			rf.persist()
