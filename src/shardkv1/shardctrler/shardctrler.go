@@ -5,13 +5,13 @@ package shardctrler
 //
 
 import (
+	"strconv"
 
-	"6.5840/kvsrv1"
-	"6.5840/kvtest1"
+	kvsrv "6.5840/kvsrv1"
+	kvtest "6.5840/kvtest1"
 	"6.5840/shardkv1/shardcfg"
-	"6.5840/tester1"
+	tester "6.5840/tester1"
 )
-
 
 // ShardCtrler for the controller and kv clerk.
 type ShardCtrler struct {
@@ -21,6 +21,7 @@ type ShardCtrler struct {
 	killed int32 // set by Kill()
 
 	// Your data here.
+	currentConfigKey string
 }
 
 // Make a ShardCltler, which stores its state in a kvsrv.
@@ -45,6 +46,11 @@ func (sck *ShardCtrler) InitController() {
 // lists shardgrp shardcfg.Gid1 for all shards.
 func (sck *ShardCtrler) InitConfig(cfg *shardcfg.ShardConfig) {
 	// Your code here
+
+	key := strconv.Itoa(int(cfg.Num))
+	sck.currentConfigKey = key
+	value := cfg.String()
+	sck.IKVClerk.Put(key, value, 0)
 }
 
 // Called by the tester to ask the controller to change the
@@ -55,10 +61,12 @@ func (sck *ShardCtrler) ChangeConfigTo(new *shardcfg.ShardConfig) {
 	// Your code here.
 }
 
-
 // Return the current configuration
 func (sck *ShardCtrler) Query() *shardcfg.ShardConfig {
 	// Your code here.
-	return nil
-}
 
+	key := sck.currentConfigKey
+	value, _, _ := sck.IKVClerk.Get(key)
+	currentConfig := shardcfg.FromString(value)
+	return currentConfig
+}

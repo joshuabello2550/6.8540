@@ -670,13 +670,15 @@ func (rf *Raft) leaderRepeat() {
 					// leader has the log follower wants
 					if nextIndex > rf.snapshotIndex {
 						prevLogIndex := nextIndex - 1
-						entries := rf.log[rf.getPhysicalIndex(nextIndex):len(rf.log)]
+						if rf.getPhysicalIndex(nextIndex) <= len(rf.log) {
+							entries := rf.log[rf.getPhysicalIndex(nextIndex):len(rf.log)]
 
-						// If last log index ≥ nextIndex for a follower: send AppendEntries RPC with log entries starting at nextIndex
-						slog.Info("leaderRepeat sendAppendEntries", "server", server, "leader", rf.me, "nextIndex", nextIndex, "len(entries)", len(entries))
-						args := &AppendEntriesArgs{Term: rf.currentTerm, LeaderId: rf.me, Entries: entries, LeaderCommit: rf.commitIndex, PrevLogIndex: prevLogIndex, PrevLogTerm: rf.log[rf.getPhysicalIndex(prevLogIndex)].Term}
-						reply := &AppendEntriesReply{}
-						go rf.sendAppendEntries(server, args, reply)
+							// If last log index ≥ nextIndex for a follower: send AppendEntries RPC with log entries starting at nextIndex
+							slog.Info("leaderRepeat sendAppendEntries", "server", server, "leader", rf.me, "nextIndex", nextIndex, "len(entries)", len(entries))
+							args := &AppendEntriesArgs{Term: rf.currentTerm, LeaderId: rf.me, Entries: entries, LeaderCommit: rf.commitIndex, PrevLogIndex: prevLogIndex, PrevLogTerm: rf.log[rf.getPhysicalIndex(prevLogIndex)].Term}
+							reply := &AppendEntriesReply{}
+							go rf.sendAppendEntries(server, args, reply)
+						}
 					} else {
 						slog.Info("leaderRepeat sendInstallSnapshot", "server", server, "leader", rf.me, "nextIndex", nextIndex, "rf.snapshotIndex", rf.snapshotIndex)
 
@@ -715,17 +717,22 @@ func (rf *Raft) allRepeat() {
 		applyMsgs := make([]raftapi.ApplyMsg, 0)
 		for rf.lastApplied < rf.commitIndex {
 			commitIndex := rf.lastApplied + 1
-			command := rf.log[rf.getPhysicalIndex(commitIndex)].Command
-			applyMsgs = append(applyMsgs, raftapi.ApplyMsg{
-				CommandValid: true,
-				Command:      command,
-				CommandIndex: commitIndex,
-			})
+			if commitIndex < rf.getLogicalIndex(len(rf.log)) {
+				command := rf.log[rf.getPhysicalIndex(commitIndex)].Command
 
-			rf.lastApplied++
+				applyMsgs = append(applyMsgs, raftapi.ApplyMsg{
+					CommandValid: true,
+					Command:      command,
+					CommandIndex: commitIndex,
+				})
+
+				rf.lastApplied++
+			} else {
+				break
+			}
 		}
-
 		rf.mu.Unlock()
+
 		if len(applyMsgs) > 0 {
 			rf.applyEntries(applyMsgs)
 		}
