@@ -9,19 +9,23 @@ package shardkv
 //
 
 import (
+	"time"
+
+	"6.5840/shardkv1/shardcfg"
 	"6.5840/shardkv1/shardgrp"
 
 	"6.5840/kvsrv1/rpc"
-	"6.5840/kvtest1"
+	kvtest "6.5840/kvtest1"
 	"6.5840/shardkv1/shardctrler"
-	"6.5840/tester1"
+	tester "6.5840/tester1"
 )
 
 type Clerk struct {
 	clnt *tester.Clnt
 	sck  *shardctrler.ShardCtrler
-	rcks   map[tester.Tgid]*shardgrp.Clerk
+	rcks map[tester.Tgid]*shardgrp.Clerk
 	// You will have to modify this struct.
+	isfirst bool
 }
 
 // The tester calls MakeClerk and passes in a shardctrler so that
@@ -41,7 +45,6 @@ func (ck *Clerk) GetClerk(gid tester.Tgid) (*shardgrp.Clerk, bool) {
 	return rck, ok
 }
 
-
 // Get a key from a shardgrp.  You can use shardcfg.Key2Shard(key) to
 // find the shard responsible for the key and ck.sck.Query() to read
 // the current configuration and lookup the servers in the group
@@ -49,11 +52,53 @@ func (ck *Clerk) GetClerk(gid tester.Tgid) (*shardgrp.Clerk, bool) {
 // calling shardgrp.MakeClerk(ck.clnt, servers).
 func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	// You will have to modify this function.
-	return "", 0, ""
+
+	for {
+		// get start responsible for the key and then look up servers for that shard
+		shard := shardcfg.Key2Shard(key)
+		currentConfig := ck.sck.Query()
+		gid, servers, gidServersOk := currentConfig.GidServers(shard)
+
+		if gidServersOk {
+			// make the clerk for the group if it does not exist
+			if _, shardgrpClerkOK := ck.rcks[gid]; !shardgrpClerkOK {
+				ck.rcks[gid] = shardgrp.MakeClerk(ck.clnt, servers)
+			}
+
+			shardgrpClerk := ck.rcks[gid]
+			value, version, ok := shardgrpClerk.Get(key)
+
+			// The shardgrp only ever returns when it is OK or NoKey
+			return value, version, ok
+		}
+
+		time.Sleep(0 * time.Millisecond)
+	}
 }
 
 // Put a key to a shard group.
 func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 	// You will have to modify this function.
-	return ""
+	for {
+		// get start responsible for the key and then look up servers for that shard
+		shard := shardcfg.Key2Shard(key)
+		currentConfig := ck.sck.Query()
+		gid, servers, gidServersOk := currentConfig.GidServers(shard)
+
+		if gidServersOk {
+			// make the clerk for the group if it does not exist
+			if _, shardgrpClerkOK := ck.rcks[gid]; !shardgrpClerkOK {
+				ck.rcks[gid] = shardgrp.MakeClerk(ck.clnt, servers)
+			}
+
+			shardgrpClerk := ck.rcks[gid]
+			ok := shardgrpClerk.Put(key, value, version)
+
+			if ok == rpc.ErrMaybe || ok == rpc.OK {
+				return ok
+			}
+		}
+
+		time.Sleep(0 * time.Millisecond)
+	}
 }
