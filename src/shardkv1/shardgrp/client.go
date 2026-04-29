@@ -43,7 +43,7 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 				}
 			}
 		}
-		time.Sleep(0 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -67,7 +67,7 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 			}
 			ck.isfirst = false
 		}
-		time.Sleep(0 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -84,7 +84,7 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.E
 				return reply.State, reply.Err
 			}
 		}
-		time.Sleep(0 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -101,7 +101,7 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 				return reply.Err
 			}
 		}
-		time.Sleep(0 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -118,6 +118,6 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
 				return reply.Err
 			}
 		}
-		time.Sleep(0 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 }
