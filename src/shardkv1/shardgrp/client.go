@@ -14,7 +14,6 @@ type Clerk struct {
 	servers []string
 	leader  int // last successful leader (index into servers[])
 	// You can  add to this struct.
-	isfirst bool
 }
 
 func MakeClerk(clnt *tester.Clnt, servers []string) *Clerk {
@@ -37,10 +36,13 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 			reply := rpc.GetReply{}
 			ok := ck.Call(ck.servers[i], "KVServer.Get", &args, &reply)
 			if ok && reply.Err != rpc.ErrWrongLeader {
-				if reply.Err == rpc.ErrNoKey || reply.Err == rpc.OK {
-					ck.leader = i
-					return reply.Value, reply.Version, reply.Err
+				ck.leader = i
+				// should never happen
+				if reply.Err == rpc.ErrMaybe || reply.Err == rpc.ErrVersion {
+					panic("Error cannot happen: " + reply.Err)
 				}
+
+				return reply.Value, reply.Version, reply.Err
 			}
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -50,6 +52,7 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 	// Your code here
 	args := rpc.PutArgs{Key: key, Value: value, Version: version}
+	isfirst := true
 	for {
 		for idx := range len(ck.servers) {
 			// Trick to always start from leader
@@ -57,15 +60,15 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 			reply := rpc.PutReply{}
 			ok := ck.Call(ck.servers[i], "KVServer.Put", &args, &reply)
 			if ok && reply.Err != rpc.ErrWrongLeader {
-				if reply.Err == rpc.ErrVersion && !ck.isfirst {
-					ck.isfirst = true
+				ck.leader = i
+
+				if reply.Err == rpc.ErrVersion && !isfirst {
 					return rpc.ErrMaybe
 				} else {
-					ck.isfirst = true
 					return reply.Err
 				}
 			}
-			ck.isfirst = false
+			isfirst = false
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -81,6 +84,14 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.E
 			reply := shardrpc.FreezeShardReply{}
 			ok := ck.Call(ck.servers[i], "KVServer.FreezeShard", &args, &reply)
 			if ok && reply.Err != rpc.ErrWrongLeader {
+				ck.leader = i
+
+				// should never happen
+				// TODO: Am I accurate in saying that ErrorWrongGorup should never happen in freeze, install, delete
+				if reply.Err == rpc.ErrMaybe || reply.Err == rpc.ErrWrongGroup {
+					panic("Error cannot happen: " + reply.Err)
+				}
+
 				return reply.State, reply.Err
 			}
 		}
@@ -98,6 +109,13 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 			reply := shardrpc.InstallShardReply{}
 			ok := ck.Call(ck.servers[i], "KVServer.InstallShard", &args, &reply)
 			if ok && reply.Err != rpc.ErrWrongLeader {
+				ck.leader = i
+
+				// should never happen
+				if reply.Err == rpc.ErrMaybe || reply.Err == rpc.ErrWrongGroup {
+					panic("Error cannot happen: " + reply.Err)
+				}
+
 				return reply.Err
 			}
 		}
@@ -115,6 +133,13 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
 			reply := shardrpc.DeleteShardReply{}
 			ok := ck.Call(ck.servers[i], "KVServer.DeleteShard", &args, &reply)
 			if ok && reply.Err != rpc.ErrWrongLeader {
+				ck.leader = i
+
+				// should never happen
+				if reply.Err == rpc.ErrMaybe || reply.Err == rpc.ErrWrongGroup {
+					panic("Error cannot happen: " + reply.Err)
+				}
+
 				return reply.Err
 			}
 		}
