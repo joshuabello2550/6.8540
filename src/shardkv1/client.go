@@ -68,8 +68,7 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 			shardgrpClerk := ck.rcks[gid]
 			value, version, ok := shardgrpClerk.Get(key)
 
-			// it is OK or NoKey
-			if ok != rpc.ErrWrongGroup {
+			if ok == rpc.OK || ok == rpc.ErrNoKey {
 				return value, version, ok
 			}
 			// in the case of ErrWrongGroup re-read the configuration and retry
