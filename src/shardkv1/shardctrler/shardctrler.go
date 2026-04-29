@@ -6,8 +6,10 @@ package shardctrler
 
 import (
 	kvsrv "6.5840/kvsrv1"
+	"6.5840/kvsrv1/rpc"
 	kvtest "6.5840/kvtest1"
 	"6.5840/shardkv1/shardcfg"
+	"6.5840/shardkv1/shardgrp"
 	tester "6.5840/tester1"
 )
 
@@ -20,6 +22,7 @@ type ShardCtrler struct {
 
 	// Your data here.
 	currentConfigKey string
+	version          rpc.Tversion // TODO: May have an issue where this si not being updated
 }
 
 // Make a ShardCltler, which stores its state in a kvsrv.
@@ -27,8 +30,8 @@ func MakeShardCtrler(clnt *tester.Clnt) *ShardCtrler {
 	sck := &ShardCtrler{clnt: clnt}
 	srv := tester.ServerName(tester.GRP0, 0)
 	sck.IKVClerk = kvsrv.MakeClerk(clnt, srv)
-	sck.currentConfigKey = "Config"
 	// Your code here.
+	sck.currentConfigKey = "Config"
 	return sck
 }
 
@@ -46,7 +49,8 @@ func (sck *ShardCtrler) InitController() {
 func (sck *ShardCtrler) InitConfig(cfg *shardcfg.ShardConfig) {
 	// Your code here
 	value := cfg.String()
-	sck.IKVClerk.Put(sck.currentConfigKey, value, 0)
+	sck.IKVClerk.Put(sck.currentConfigKey, value, sck.version)
+	sck.version += 1
 }
 
 // Called by the tester to ask the controller to change the
@@ -55,6 +59,34 @@ func (sck *ShardCtrler) InitConfig(cfg *shardcfg.ShardConfig) {
 // controller.
 func (sck *ShardCtrler) ChangeConfigTo(new *shardcfg.ShardConfig) {
 	// Your code here.
+	currentConfig := sck.Query()
+
+	for shard, prevGroupId := range currentConfig.Shards {
+		prevServers := currentConfig.Groups[prevGroupId]
+
+		newGroupId := new.Shards[shard]
+		newServers := new.Groups[newGroupId]
+
+		if prevGroupId != newGroupId {
+			shard := shardcfg.Tshid(shard)
+			prevShardGrpClerk := shardgrp.MakeClerk(sck.clnt, prevServers)
+			newShardGrpClerk := shardgrp.MakeClerk(sck.clnt, newServers)
+
+			// "freeze" the shard at the source shardgrp
+			state, _ := prevShardGrpClerk.FreezeShard(shard, currentConfig.Num)
+
+			// copy (install) the shard to the destination shardgrp
+			newShardGrpClerk.InstallShard(shard, state, new.Num)
+
+			// then delete the frozen shard
+			prevShardGrpClerk.DeleteShard(shard, currentConfig.Num)
+
+			// post a new configuration so that clients can find the moved shard
+			value := new.String()
+			sck.IKVClerk.Put(sck.currentConfigKey, value, sck.version)
+			sck.version += 1
+		}
+	}
 }
 
 // Return the current configuration

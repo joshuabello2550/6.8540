@@ -68,11 +68,14 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 			shardgrpClerk := ck.rcks[gid]
 			value, version, ok := shardgrpClerk.Get(key)
 
-			// The shardgrp only ever returns when it is OK or NoKey
-			return value, version, ok
+			// it is OK or NoKey
+			if ok != rpc.ErrWrongGroup {
+				return value, version, ok
+			}
+			// in the case of ErrWrongGroup re-read the configuration and retry
 		}
 
-		time.Sleep(0 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -97,8 +100,9 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 			if ok == rpc.ErrMaybe || ok == rpc.OK {
 				return ok
 			}
+			// in the case of ErrWrongGroup re-read the configuration and retry
 		}
 
-		time.Sleep(0 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 }

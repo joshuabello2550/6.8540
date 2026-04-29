@@ -5,6 +5,7 @@ import (
 
 	"6.5840/kvsrv1/rpc"
 	"6.5840/shardkv1/shardcfg"
+	"6.5840/shardkv1/shardgrp/shardrpc"
 	tester "6.5840/tester1"
 )
 
@@ -72,15 +73,51 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 
 func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.Err) {
 	// Your code here
-	return nil, ""
+	args := shardrpc.FreezeShardArgs{Shard: s, Num: num}
+	for {
+		for idx := range len(ck.servers) {
+			// Trick to always start from leader
+			i := (ck.leader + idx) % len(ck.servers)
+			reply := shardrpc.FreezeShardReply{}
+			ok := ck.Call(ck.servers[i], "KVServer.FreezeShard", &args, &reply)
+			if ok && reply.Err != rpc.ErrWrongLeader {
+				return reply.State, reply.Err
+			}
+		}
+		time.Sleep(0 * time.Millisecond)
+	}
 }
 
 func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum) rpc.Err {
 	// Your code here
-	return ""
+	args := shardrpc.InstallShardArgs{Shard: s, State: state, Num: num}
+	for {
+		for idx := range len(ck.servers) {
+			// Trick to always start from leader
+			i := (ck.leader + idx) % len(ck.servers)
+			reply := shardrpc.InstallShardReply{}
+			ok := ck.Call(ck.servers[i], "KVServer.InstallShard", &args, &reply)
+			if ok && reply.Err != rpc.ErrWrongLeader {
+				return reply.Err
+			}
+		}
+		time.Sleep(0 * time.Millisecond)
+	}
 }
 
 func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
 	// Your code here
-	return ""
+	args := shardrpc.DeleteShardArgs{Shard: s, Num: num}
+	for {
+		for idx := range len(ck.servers) {
+			// Trick to always start from leader
+			i := (ck.leader + idx) % len(ck.servers)
+			reply := shardrpc.DeleteShardReply{}
+			ok := ck.Call(ck.servers[i], "KVServer.DeleteShard", &args, &reply)
+			if ok && reply.Err != rpc.ErrWrongLeader {
+				return reply.Err
+			}
+		}
+		time.Sleep(0 * time.Millisecond)
+	}
 }

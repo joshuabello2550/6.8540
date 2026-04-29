@@ -2,6 +2,7 @@ package shardgrp
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -9,6 +10,7 @@ import (
 	"6.5840/kvsrv1/rpc"
 	"6.5840/labgob"
 	"6.5840/labrpc"
+	"6.5840/shardkv1/shardcfg"
 	"6.5840/shardkv1/shardgrp/shardrpc"
 	tester "6.5840/tester1"
 )
@@ -23,8 +25,10 @@ type KVServer struct {
 	gid tester.Tgid
 
 	// Your code here
-	mu      sync.Mutex
-	records map[string]*Record
+	mu           sync.Mutex
+	records      map[string]*Record
+	largestNum   [shardcfg.NShards]shardcfg.Tnum // initialized to be all zeros
+	frozenShards map[shardcfg.Tshid]struct{}     // keys that resolve to these shards should reject with ErrWrongGroup
 }
 
 type Record struct {
@@ -62,29 +66,101 @@ func (kv *KVServer) DoOp(req any) any {
 		reply := rpc.PutReply{}
 
 		key, value, version := args.Key, args.Value, args.Version
-		record, ok := kv.records[key]
-		// key in record
-		if ok {
-			// version don't match
-			if record.Version != version {
-				reply.Err = rpc.ErrVersion
-			} else {
-				reply.Err = rpc.OK
-				kv.records[key].Value = value
-				kv.records[key].Version += 1
-			}
+
+		// reject Put's for keys in the moving shard
+		keyShard := shardcfg.Key2Shard(key)
+		if _, ok := kv.frozenShards[keyShard]; ok {
+			reply.Err = rpc.ErrWrongGroup
 		} else {
-			// add record if first entry
-			if version != 0 {
-				reply.Err = rpc.ErrNoKey
+			record, ok := kv.records[key]
+			// key in record
+			if ok {
+				// version don't match
+				if record.Version != version {
+					reply.Err = rpc.ErrVersion
+				} else {
+					reply.Err = rpc.OK
+					kv.records[key].Value = value
+					kv.records[key].Version += 1
+				}
 			} else {
+				// add record if first entry
+				if version != 0 {
+					reply.Err = rpc.ErrNoKey
+				} else {
+					reply.Err = rpc.OK
+					newRecord := Record{Value: value, Version: version + 1}
+					kv.records[key] = &newRecord
+				}
 
-				reply.Err = rpc.OK
-				newRecord := Record{Value: value, Version: version + 1}
-				kv.records[key] = &newRecord
 			}
-
 		}
+
+		return reply
+
+	case shardrpc.FreezeShardArgs:
+		reply := shardrpc.FreezeShardReply{}
+
+		// get the data of the frozen shard and pass to reply
+		data := make(map[string]*Record)
+		for key, value := range kv.records {
+			keyShard := shardcfg.Key2Shard(key)
+
+			if args.Shard == keyShard {
+				data[key] = value
+			}
+		}
+
+		state, err := json.Marshal(data)
+
+		if err != nil {
+			panic("Marshal error: " + err.Error())
+		}
+
+		// save this shard to frozenShards
+		kv.frozenShards[args.Shard] = struct{}{}
+
+		reply.State = state
+		reply.Err = rpc.OK
+		reply.Num = args.Num
+
+		return reply
+
+	case shardrpc.InstallShardArgs:
+		reply := shardrpc.InstallShardReply{}
+
+		// add the data from state into records
+		data := make(map[string]*Record)
+		err := json.Unmarshal(args.State, &data)
+		if err != nil {
+			panic("UnMarshall error: " + err.Error())
+		}
+
+		for key, value := range data {
+			kv.records[key] = value
+		}
+
+		reply.Err = rpc.OK
+
+		return reply
+
+	case shardrpc.DeleteShardArgs:
+		reply := shardrpc.DeleteShardReply{}
+
+		// delete data that map to this shard from the records
+		for key := range kv.records {
+			keyShard := shardcfg.Key2Shard(key)
+
+			if args.Shard == keyShard {
+				delete(kv.records, key)
+			}
+		}
+
+		// delete shard from frozenShards
+		delete(kv.frozenShards, args.Shard)
+
+		reply.Err = rpc.OK
+
 		return reply
 	}
 	panic(fmt.Errorf("req: %+v, should be either a put or a get", req))
@@ -152,16 +228,76 @@ func (kv *KVServer) Put(args *rpc.PutArgs, reply *rpc.PutReply) {
 // shard) and return the key/values stored in that shard.
 func (kv *KVServer) FreezeShard(args *shardrpc.FreezeShardArgs, reply *shardrpc.FreezeShardReply) {
 	// Your code here
+
+	// reject old RPCs
+	largestNum := kv.largestNum[args.Shard]
+	if args.Num < largestNum {
+		return
+	} else {
+		kv.largestNum[args.Shard] = args.Num
+	}
+
+	rpcError, val := kv.rsm.Submit(*args)
+
+	// rpcError equals rpc.ErrWrongLeader or ErrWrongGroup in this case
+	if rpcError != rpc.OK {
+		reply.Err = rpcError
+		return
+	}
+
+	result := val.(shardrpc.FreezeShardReply)
+	reply.State = result.State
+	reply.Num = result.Num
+	reply.Err = result.Err
 }
 
 // Install the supplied state for the specified shard.
 func (kv *KVServer) InstallShard(args *shardrpc.InstallShardArgs, reply *shardrpc.InstallShardReply) {
 	// Your code here
+
+	// reject old RPCs
+	largestNum := kv.largestNum[args.Shard]
+	if args.Num < largestNum {
+		return
+	} else {
+		kv.largestNum[args.Shard] = args.Num
+	}
+
+	rpcError, val := kv.rsm.Submit(*args)
+
+	// rpcError equals rpc.ErrWrongLeader in this case
+	if rpcError != rpc.OK {
+		reply.Err = rpcError
+		return
+	}
+
+	result := val.(shardrpc.InstallShardReply)
+	reply.Err = result.Err
+
 }
 
 // Delete the specified shard.
 func (kv *KVServer) DeleteShard(args *shardrpc.DeleteShardArgs, reply *shardrpc.DeleteShardReply) {
 	// Your code here
+
+	// reject old RPCs
+	largestNum := kv.largestNum[args.Shard]
+	if args.Num < largestNum {
+		return
+	} else {
+		kv.largestNum[args.Shard] = args.Num
+	}
+
+	rpcError, val := kv.rsm.Submit(*args)
+
+	// rpcError equals rpc.ErrWrongLeader in this case
+	if rpcError != rpc.OK {
+		reply.Err = rpcError
+		return
+	}
+
+	result := val.(shardrpc.DeleteShardReply)
+	reply.Err = result.Err
 }
 
 // StartShardServerGrp starts a server for shardgrp `gid`.
@@ -178,7 +314,7 @@ func StartServerShardGrp(servers []*labrpc.ClientEnd, gid tester.Tgid, me int, p
 	labgob.Register(shardrpc.DeleteShardArgs{})
 	labgob.Register(rsm.Op{})
 
-	kv := &KVServer{gid: gid, me: me, records: make(map[string]*Record)}
+	kv := &KVServer{gid: gid, me: me, records: make(map[string]*Record), frozenShards: make(map[shardcfg.Tshid]struct{})}
 	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv)
 
 	// Your code here
