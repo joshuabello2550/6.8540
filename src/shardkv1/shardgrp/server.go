@@ -43,7 +43,6 @@ type Snapshot struct {
 
 func (kv *KVServer) DoOp(req any) any {
 	// Your code here
-	// Your code here
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
@@ -52,7 +51,7 @@ func (kv *KVServer) DoOp(req any) any {
 		reply := rpc.GetReply{}
 
 		key := args.Key
-		// reject Gets for keys in NOT shard it owns
+		// reject Gets for keys NOT in shard it owns
 		keyShard := shardcfg.Key2Shard(key)
 		if ok := kv.shards[keyShard]; !ok {
 			reply.Err = rpc.ErrWrongGroup
@@ -73,7 +72,7 @@ func (kv *KVServer) DoOp(req any) any {
 
 		key, value, version := args.Key, args.Value, args.Version
 
-		// reject Puts for keys in NOT shard it owns
+		// reject Puts for keys NOT in shard it owns
 		keyShard := shardcfg.Key2Shard(key)
 		if ok := kv.shards[keyShard]; !ok {
 			reply.Err = rpc.ErrWrongGroup
@@ -342,10 +341,12 @@ func StartServerShardGrp(servers []*labrpc.ClientEnd, gid tester.Tgid, me int, p
 
 	// Your code here
 
-	// if this server is part ofthe inialize group initialzie it to own all shards
-	if gid == shardcfg.Gid1 {
-		for i := range shardcfg.NShards {
+	// if this server is part of the initial group initialzie it to own all shards
+	for i := range shardcfg.NShards {
+		if gid == shardcfg.Gid1 {
 			kv.shards[i] = true
+		} else {
+			kv.shards[i] = false
 		}
 	}
 

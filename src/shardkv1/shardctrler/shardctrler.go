@@ -22,7 +22,7 @@ type ShardCtrler struct {
 
 	// Your data here.
 	currentConfigKey string
-	version          rpc.Tversion // TODO: May have an issue where this si not being updated
+	version          rpc.Tversion
 }
 
 // Make a ShardCltler, which stores its state in a kvsrv.
@@ -80,13 +80,12 @@ func (sck *ShardCtrler) ChangeConfigTo(new *shardcfg.ShardConfig) {
 
 			// then delete the frozen shard
 			prevShardGrpClerk.DeleteShard(shard, currentConfig.Num)
-
-			// post a new configuration so that clients can find the moved shard
-			value := new.String()
-			sck.IKVClerk.Put(sck.currentConfigKey, value, sck.version)
-			sck.version += 1
 		}
 	}
+	// post a new configuration so that clients can find the moved shard
+	value := new.String()
+	sck.IKVClerk.Put(sck.currentConfigKey, value, sck.version)
+	sck.version += 1
 }
 
 // Return the current configuration

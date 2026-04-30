@@ -87,8 +87,8 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.E
 				ck.leader = i
 
 				// should never happen
-				// TODO: Am I accurate in saying that ErrorWrongGorup should never happen in freeze, install, delete
-				if reply.Err == rpc.ErrMaybe || reply.Err == rpc.ErrWrongGroup {
+				if reply.Err == rpc.ErrMaybe || reply.Err == rpc.ErrWrongGroup ||
+					reply.Err == rpc.ErrNoKey || reply.Err == rpc.ErrVersion {
 					panic("Error cannot happen: " + reply.Err)
 				}
 
@@ -112,7 +112,8 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 				ck.leader = i
 
 				// should never happen
-				if reply.Err == rpc.ErrMaybe || reply.Err == rpc.ErrWrongGroup {
+				if reply.Err == rpc.ErrMaybe || reply.Err == rpc.ErrWrongGroup ||
+					reply.Err == rpc.ErrNoKey || reply.Err == rpc.ErrVersion {
 					panic("Error cannot happen: " + reply.Err)
 				}
 
@@ -136,7 +137,8 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
 				ck.leader = i
 
 				// should never happen
-				if reply.Err == rpc.ErrMaybe || reply.Err == rpc.ErrWrongGroup {
+				if reply.Err == rpc.ErrMaybe || reply.Err == rpc.ErrWrongGroup ||
+					reply.Err == rpc.ErrNoKey || reply.Err == rpc.ErrVersion {
 					panic("Error cannot happen: " + reply.Err)
 				}
 
